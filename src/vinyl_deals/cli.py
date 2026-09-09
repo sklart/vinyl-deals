@@ -26,7 +26,7 @@ def main() -> int:
             from vinyl_deals.matching.service import build_match_queue
             print(f"Built {build_match_queue(repository)} candidate matches.")
         rows = repository.possible_matches()
-        print("No pending possible matches." if not rows else "\n".join(f"{offer_id} ↔ {candidate_id}: {confidence:.0%} ({reasons})" for offer_id, candidate_id, confidence, reasons in rows))
+        print("No pending possible matches." if not rows else "\n".join(f"{offer_id} <-> {candidate_id}: {confidence:.0%} ({reasons})" for offer_id, candidate_id, confidence, reasons in rows))
         return 0
     if args.command == "decide-match":
         SQLiteRepository(args.database).decide_match(args.offer_id, args.candidate_offer_id, args.decision, args.note)

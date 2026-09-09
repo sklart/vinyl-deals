@@ -91,7 +91,7 @@ class ImagineClubAdapter(BaseStoreAdapter):
         sku = self._text(self._first(r'commerce-product-sku-label">\s*Артикул:\s*</div>\s*([^<]+)', html, re.S))
         media = self._text(self._first(r'lp-state.*?title="([^"]+)"', html, re.S)) or listing_offer.condition_media
         sleeve = self._text(self._first(r'cover-state.*?title="([^"]+)"', html, re.S)) or listing_offer.condition_sleeve
-        description = fields.get("описание")
+        description = fields.get("описание") or ""
         tags = tuple(part.strip() for part in (fields.get("категория", "") + "," + description).split(",") if part.strip())
         return RawOffer(**{**{name: getattr(listing_offer, name) for name in listing_offer.__dataclass_fields__},
             "artist_raw": fields.get("исполнитель") or listing_offer.artist_raw,

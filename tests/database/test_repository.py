@@ -3,6 +3,12 @@ from dataclasses import replace
 from datetime import timedelta
 from vinyl_deals.adapters.vinyl_ru import VinylRuAdapter
 from vinyl_deals.database import SQLiteRepository
+from vinyl_deals.database.migrations import CURRENT_VERSION
+
+
+def test_initialize_applies_current_schema_version(tmp_path: Path) -> None:
+    repository = SQLiteRepository(tmp_path / "offers.sqlite3")
+    assert repository.schema_version() == CURRENT_VERSION
 
 def test_upsert_preserves_price_history(tmp_path: Path) -> None:
     offer = VinylRuAdapter().parse_catalog("ID;Название;Цена\n1;A - B;1000\n")[0]; database = tmp_path / "offers.sqlite3"; repository = SQLiteRepository(database); repository.upsert_offer(offer); repository.upsert_offer(offer)

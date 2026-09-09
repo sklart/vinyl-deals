@@ -11,3 +11,10 @@ def test_parses_listing_fixture_without_network() -> None:
 def test_enriches_listing_from_product_fixture() -> None:
     adapter = ImagineClubAdapter(); listing = adapter.parse_listing(Path("tests/fixtures/imagine_club/listing.html").read_text(encoding="utf-8"))[0]; detail = adapter.parse_product_page(Path("tests/fixtures/imagine_club/product.html").read_text(encoding="utf-8"), listing)
     assert (detail.store_sku, detail.catalog_number_raw, detail.label, detail.release_year, detail.condition_media, detail.condition_sleeve) == ("00-00002589", None, "Polydor", 1978, "EX", "VG+"); assert "Gatefold" in detail.edition_tags
+
+
+def test_enrichment_tolerates_a_card_without_description() -> None:
+    adapter = ImagineClubAdapter()
+    listing = adapter.parse_listing(Path("tests/fixtures/imagine_club/listing.html").read_text(encoding="utf-8"))[0]
+    detail = adapter.parse_product_page("", listing)
+    assert detail.description is None

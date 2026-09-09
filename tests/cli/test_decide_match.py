@@ -1,4 +1,10 @@
 from vinyl_deals.cli import main
+
+
+def test_match_output_is_console_safe(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["vinyl-deals", "match", "--database", str(tmp_path / "offers.sqlite3")])
+    assert main() == 0
+    assert capsys.readouterr().out == "No pending possible matches.\n"
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.domain import RawOffer
 
