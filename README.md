@@ -31,7 +31,7 @@ foreign keys, канонизирует пары offer id и умеет обно�
 базу. В CLI выводятся количества найденных, обогащённых и ошибочных карточек.
 
 Telegram, Web UI и новые магазины пока намеренно не реализованы.
- 
+
 Phase 3 adds conservative deal detection for matched releases: market median
 uses in-stock, same-condition offers and one price per store; historical price
 signals come from `price_history`. Shipping and store-sale `old_price` are not
