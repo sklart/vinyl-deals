@@ -47,7 +47,7 @@ def median_price(prices: list[Decimal]) -> Decimal | None:
 
 
 def condition_bucket(offer: RawOffer) -> str:
-    value = (offer.condition_media or "").casefold().strip()
+    value = re.sub(r"[_-]+", " ", (offer.condition_media or "").casefold()).strip()
     if re.search(r"\b(new|sealed)\b", value): return "new"
     if value in {"m", "nm", "m/nm"} or "mint" in value: return "nm"
     if value.startswith("ex") or "excellent" in value: return "ex"
@@ -77,11 +77,13 @@ def evaluate_offer(repository: SQLiteRepository, offer_id: int, *, now: datetime
     if offer.fetched_at < point - timedelta(days=freshness_days):
         return None
     comparables = repository.comparable_release_offers(release_id, exclude_offer_id=offer_id)
+    target_condition = condition_bucket(offer)
     # One store contributes at most one current price; lowest is the useful offer.
     by_store: dict[str, Decimal] = {}
     for _, other in comparables:
         if (
-            condition_bucket(other) == condition_bucket(offer)
+            target_condition != "unknown"
+            and condition_bucket(other) == target_condition
             and other.source != offer.source
             and other.price is not None
             and other.price > 0

@@ -149,3 +149,24 @@ def test_condition_bucket_accepts_common_long_forms():
     assert condition_bucket(offer("Good (G)")) == "good"
     assert condition_bucket(offer("NEW")) == "new"
     assert condition_bucket(offer("SEALED")) == "new"
+    assert condition_bucket(offer("NEW_SEALED")) == "new"
+    assert condition_bucket(offer("NEW-SEALED")) == "new"
+
+
+def test_unknown_condition_has_no_market_benchmark_but_keeps_history(tmp_path):
+    repo = SQLiteRepository(tmp_path / "unknown-condition.sqlite3")
+    now = datetime(2026, 9, 9, tzinfo=timezone.utc)
+    add(repo, "target", "1", 100, condition="ungraded", when=now - timedelta(days=1))
+    add(repo, "target", "1", 70, condition="ungraded", when=now)
+    add(repo, "unknown-store", "2", 100, condition="mystery", when=now)
+    add(repo, "new-store", "3", 100, condition="NEW", when=now)
+    build_match_queue(repo)
+
+    result = evaluate_offer(repo, 1, now=now)
+    assert result.deal_class == DealClass.INSUFFICIENT
+    assert result.market_median is None
+    assert result.comparable_count == 0
+    assert result.is_historical_low
+    assert result.previous_price == Decimal("100")
+    assert result.price_drop_pct == Decimal("30")
+    assert "historical signal only" in result.reasons
