@@ -21,6 +21,20 @@ class StoreState(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class Release:
+    """Canonical metadata aggregated from matched store offers."""
+
+    id: int
+    artist: str
+    title: str
+    barcode: str | None = None
+    label: str | None = None
+    catalog_number: str | None = None
+    release_year: int | None = None
+    format: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RawOffer:
     """Source-faithful offer. Normalisation and matching belong outside adapters."""
 

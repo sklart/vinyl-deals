@@ -13,6 +13,7 @@ vinyl-deals scrape imagine_club --page-limit 1 --enrich
 vinyl-deals scrape collectomania --page-limit 1 --enrich
 vinyl-deals match --build
 vinyl-deals deals --min-class GOOD --limit 50
+vinyl-deals search --artist "Opeth" --title "Blackwater Park"
 vinyl-deals decide-match 12 47 different_release --note "different pressing"
 ```
 
@@ -42,3 +43,8 @@ By default `deals` hides offers without a dependable market sample. Use
 `vinyl-deals deals --include-insufficient` to inspect only those with a new
 historical low or a price drop of at least 10%; they remain labelled
 `INSUFFICIENT`, not as market deals.
+
+`vinyl-deals search` searches matched Releases by artist, title, barcode,
+catalogue number, label, year and format. It shows fresh offers from the
+supported stores, a condition-safe best current price and a Discogs *search*
+link; it does not claim a specific Discogs release match.

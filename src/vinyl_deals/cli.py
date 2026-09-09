@@ -13,6 +13,7 @@ def main() -> int:
     match = commands.add_parser("match", help="Show pending possible release matches"); match.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); match.add_argument("--build", action="store_true", help="Build candidate pairs from persisted offers")
     decide = commands.add_parser("decide-match", help="Save a manual release-match decision"); decide.add_argument("offer_id", type=int); decide.add_argument("candidate_offer_id", type=int); decide.add_argument("decision", choices=["same_release", "different_release", "ignore"]); decide.add_argument("--note"); decide.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3"))
     deals = commands.add_parser("deals", help="Evaluate matched release offers"); deals.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); deals.add_argument("--min-class", default="NORMAL", choices=["NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); deals.add_argument("--include-insufficient", action="store_true", help="Include historical-only signals with insufficient market data"); deals.add_argument("--limit", type=int, default=50); deals.add_argument("--release-id", type=int)
+    search = commands.add_parser("search", help="Search matched releases and their current offers"); search.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); search.add_argument("--artist"); search.add_argument("--title"); search.add_argument("--barcode"); search.add_argument("--catalog"); search.add_argument("--label"); search.add_argument("--year", type=int); search.add_argument("--format")
     commands.add_parser("doctor", help="Check local configuration"); args = parser.parse_args()
     if args.command == "doctor":
         repository = SQLiteRepository()
@@ -58,6 +59,27 @@ def main() -> int:
             heading = str(item.deal_class) if item.deal_class == DealClass.INSUFFICIENT else f"{item.deal_class} {item.discount_pct or Decimal('0'):.0f}%"
             market = "" if item.deal_class == DealClass.INSUFFICIENT else f"Market median: {item.market_median or '-'}\n"
             print(f"{heading}\n\n{offer.artist_raw or '-'} — {offer.title_raw or '-'}\nRelease: {offer.label or '-'} / {offer.catalog_number_raw or '-'} / {offer.release_year or '-'}\nStore: {offer.source}\nPrice: {item.current_price} RUB\n{market}Comparisons: {item.comparable_count}\nHistorical min: {item.historical_min or '-'}\n90d median: {item.median_90d or '-'}\n90d minimum: {item.minimum_90d or '-'}\nPrevious price: {item.previous_price or '-'}\nPrice drop: {item.price_drop_pct or Decimal('0'):.0f}%\nHistorical low: {'YES' if item.is_historical_low else 'NO'}\nReasons: {', '.join(item.reasons)}\n{offer.url}\n")
+        return 0
+    if args.command == "search":
+        from vinyl_deals.search import search_releases
+        results = search_releases(SQLiteRepository(args.database), artist=args.artist, title=args.title, barcode=args.barcode, catalog=args.catalog, label=args.label, year=args.year, format=args.format)
+        if not results:
+            print("No releases found.")
+            return 0
+        for result in results:
+            metadata = " / ".join(str(value) for value in (result.label, result.catalog_number, result.release_year, result.format) if value)
+            print(f"{result.artist} — {result.title}\n{metadata or '-'}\n")
+            if result.best_offer:
+                print(f"BEST: {result.best_offer.store} — {result.best_offer.price} RUB\n")
+            else:
+                print("BEST: unavailable\n")
+            for offer in result.offers:
+                price = f"{offer.price} RUB" if offer.price is not None else "-"
+                availability = "" if offer.availability.value == "in_stock" else f" ({offer.availability.value})"
+                print(f"{offer.store:<18} {price}{availability}")
+            if result.discogs_url:
+                print(f"\nDiscogs: {result.discogs_url}")
+            print()
         return 0
     adapter = {"vinyl_ru": VinylRuAdapter, "imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source]() if args.source == "vinyl_ru" else {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source](page_limit=args.page_limit)
     repository = SQLiteRepository(args.database)

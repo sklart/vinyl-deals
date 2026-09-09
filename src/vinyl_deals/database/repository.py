@@ -6,7 +6,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from decimal import Decimal
-from vinyl_deals.domain import Availability, RawOffer
+from vinyl_deals.domain import Availability, RawOffer, Release
 from vinyl_deals.database.migrations import CURRENT_VERSION, migrate
 from vinyl_deals.matching.normalize import normalize_barcode
 from vinyl_deals.matching import match_offers, MatchKind
@@ -170,6 +170,20 @@ class SQLiteRepository:
             if release_id is None:
                 return [row[0] for row in connection.execute("SELECT id FROM offers WHERE release_id IS NOT NULL")]
             return [row[0] for row in connection.execute("SELECT id FROM offers WHERE release_id=?", (release_id,))]
+
+    def releases_for_search(self) -> list[Release]:
+        """Return canonical Release metadata for the search service."""
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format FROM releases ORDER BY artist, title, id").fetchall()
+        return [Release(*row) for row in rows]
+
+    def offers_for_release(self, release_id: int) -> list[tuple[int, RawOffer]]:
+        """Return persisted offers for one Release without pricing policy."""
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute("SELECT id, offer_json FROM offers WHERE release_id=? ORDER BY source, id", (release_id,)).fetchall()
+        return [(offer_id, _deserialize_offer(payload)) for offer_id, payload in rows]
 
     def comparable_release_offers(self, release_id: int, exclude_offer_id: int | None = None) -> list[tuple[int, RawOffer]]:
         """Return current stock offers for a Release; pricing applies condition policy."""
