@@ -34,6 +34,13 @@ class CollectomaniaAdapter(BaseStoreAdapter):
                 if url and self.delay_seconds:
                     sleep(self.delay_seconds)
             warnings = (f"Catalogue intentionally limited to {self.page_limit} pages.",) if url else ()
+            if not offers:
+                return ScrapeResult(
+                    (),
+                    StoreState.DEGRADED,
+                    ("Collectomania catalogue parsed zero offers; parser may be stale.",),
+                    pages_processed=pages,
+                )
             return ScrapeResult(tuple(offers), warnings=warnings, pages_processed=pages)
         except HTTPError as error:
             if error.code in {403, 429}:

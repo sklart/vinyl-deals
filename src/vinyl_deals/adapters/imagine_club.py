@@ -38,6 +38,13 @@ class ImagineClubAdapter(BaseStoreAdapter):
                 offers.extend(self.parse_listing(html))
                 if page < last_page and self.delay_seconds:
                     sleep(self.delay_seconds)
+            if not offers:
+                return ScrapeResult(
+                    (),
+                    StoreState.DEGRADED,
+                    ("Imagine Club catalogue parsed zero offers; parser may be stale.",),
+                    pages_processed=len(pages),
+                )
             warning = () if self.page_limit is None or self.page_limit > last_page else (f"Catalogue intentionally limited to {self.page_limit} pages.",)
             return ScrapeResult(tuple(offers), warnings=warning, pages_processed=len(pages))
         except HTTPError as error:

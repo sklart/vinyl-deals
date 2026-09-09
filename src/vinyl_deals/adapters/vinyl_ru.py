@@ -36,6 +36,13 @@ class VinylRuAdapter(BaseStoreAdapter):
                 return ScrapeResult((), StoreState.DEGRADED, (f"Vinyl.ru returned HTTP {error.code}; source paused.",))
             raise
         offers = tuple(self.parse_catalog(payload))
+        if not offers:
+            return ScrapeResult(
+                (),
+                StoreState.DEGRADED,
+                ("Vinyl.ru catalogue parsed zero offers; parser may be stale.",),
+                pages_processed=1,
+            )
         return ScrapeResult(offers, pages_processed=1)
 
     def parse_catalog(self, payload: bytes | str, *, fetched_at: datetime | None = None) -> list[RawOffer]:
