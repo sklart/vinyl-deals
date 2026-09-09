@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+from decimal import Decimal
 from time import sleep
 from pathlib import Path
 from vinyl_deals.adapters import CollectomaniaAdapter, ImagineClubAdapter, VinylRuAdapter
@@ -11,6 +12,7 @@ def main() -> int:
     scrape = commands.add_parser("scrape", help="Fetch a public store catalogue"); scrape.add_argument("source", choices=["vinyl_ru", "imagine_club", "collectomania"]); scrape.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); scrape.add_argument("--page-limit", type=int, help="Temporary safe bound for a paginated source"); scrape.add_argument("--enrich", action="store_true", help="Fetch public product details for listed offers")
     match = commands.add_parser("match", help="Show pending possible release matches"); match.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); match.add_argument("--build", action="store_true", help="Build candidate pairs from persisted offers")
     decide = commands.add_parser("decide-match", help="Save a manual release-match decision"); decide.add_argument("offer_id", type=int); decide.add_argument("candidate_offer_id", type=int); decide.add_argument("decision", choices=["same_release", "different_release", "ignore"]); decide.add_argument("--note"); decide.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3"))
+    deals = commands.add_parser("deals", help="Evaluate matched release offers"); deals.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); deals.add_argument("--min-class", default="NORMAL", choices=["NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); deals.add_argument("--limit", type=int, default=50); deals.add_argument("--release-id", type=int)
     commands.add_parser("doctor", help="Check local configuration"); args = parser.parse_args()
     if args.command == "doctor":
         repository = SQLiteRepository()
@@ -39,6 +41,15 @@ def main() -> int:
             print(f"Cannot save manual decision: {error}")
             return 2
         print(f"Saved {args.decision} for {args.offer_id} <-> {args.candidate_offer_id}.")
+        return 0
+    if args.command == "deals":
+        from vinyl_deals.pricing import DealClass, evaluate_deals
+        rank = {DealClass.NORMAL: 0, DealClass.INTERESTING: 1, DealClass.GOOD: 2, DealClass.HOT: 3, DealClass.VERY_HOT: 4, DealClass.INSUFFICIENT: -1}
+        minimum = rank[DealClass(args.min_class)]
+        results = [item for item in evaluate_deals(SQLiteRepository(args.database), args.release_id) if rank[item.deal_class] >= minimum]
+        results.sort(key=lambda item: (rank[item.deal_class], item.discount_pct or Decimal("-1")), reverse=True)
+        for item in results[:args.limit]:
+            print(f"{item.deal_class} {item.discount_pct or Decimal('0'):.0f}% | offer {item.offer_id} | {item.current_price} RUB | market {item.market_median or '-'} | comparisons {item.comparable_count}")
         return 0
     adapter = {"vinyl_ru": VinylRuAdapter, "imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source]() if args.source == "vinyl_ru" else {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source](page_limit=args.page_limit)
     repository = SQLiteRepository(args.database)

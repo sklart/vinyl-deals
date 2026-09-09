@@ -158,6 +158,35 @@ class SQLiteRepository:
             rows = connection.execute("SELECT id, offer_json FROM offers").fetchall()
         return [(row[0], _deserialize_offer(row[1])) for row in rows]
 
+    def offer_by_id(self, offer_id: int) -> tuple[int | None, RawOffer] | None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute("SELECT release_id, offer_json FROM offers WHERE id=?", (offer_id,)).fetchone()
+        return (row[0], _deserialize_offer(row[1])) if row else None
+
+    def release_offer_ids(self, release_id: int | None = None) -> list[int]:
+        self.initialize()
+        with self._connect() as connection:
+            if release_id is None:
+                return [row[0] for row in connection.execute("SELECT id FROM offers WHERE release_id IS NOT NULL")]
+            return [row[0] for row in connection.execute("SELECT id FROM offers WHERE release_id=?", (release_id,))]
+
+    def comparable_release_offers(self, release_id: int, condition: str, exclude_offer_id: int | None = None) -> list[tuple[int, RawOffer]]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute("SELECT id, offer_json FROM offers WHERE release_id=? AND availability='in_stock' AND price IS NOT NULL", (release_id,)).fetchall()
+        offers = [(offer_id, _deserialize_offer(payload)) for offer_id, payload in rows if offer_id != exclude_offer_id]
+        def bucket(offer: RawOffer) -> str:
+            value = (offer.condition_media or "").casefold()
+            return "new" if value.startswith("new") else "used" if value else "unknown"
+        return [(offer_id, offer) for offer_id, offer in offers if bucket(offer) == condition]
+
+    def price_history(self, offer_id: int) -> list[tuple[str, Decimal | None]]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute("SELECT observed_at, price FROM price_history WHERE offer_id=? ORDER BY observed_at", (offer_id,)).fetchall()
+        return [(timestamp, Decimal(price) if price is not None else None) for timestamp, price in rows]
+
     def create_release_for_pair(self, offer_id: int, candidate_offer_id: int, offer: RawOffer, candidate: RawOffer, connection: sqlite3.Connection | None = None) -> int:
         self.initialize(); now = datetime.now(timezone.utc).isoformat()
         offer_id, candidate_offer_id = canonical_pair(offer_id, candidate_offer_id)

@@ -12,6 +12,7 @@ vinyl-deals scrape vinyl_ru
 vinyl-deals scrape imagine_club --page-limit 1 --enrich
 vinyl-deals scrape collectomania --page-limit 1 --enrich
 vinyl-deals match --build
+vinyl-deals deals --min-class GOOD --limit 50
 vinyl-deals decide-match 12 47 different_release --note "different pressing"
 ```
 
@@ -29,4 +30,9 @@ foreign keys, канонизирует пары offer id и умеет обно�
 карточки сохраняется как warning, а listing-level offer всё равно попадает в
 базу. В CLI выводятся количества найденных, обогащённых и ошибочных карточек.
 
-Pricing, Telegram, Web UI и новые магазины пока намеренно не реализованы.
+Telegram, Web UI и новые магазины пока намеренно не реализованы.
+ 
+Phase 3 adds conservative deal detection for matched releases: market median
+uses in-stock, same-condition offers and one price per store; historical price
+signals come from `price_history`. Shipping and store-sale `old_price` are not
+used as market-deal evidence.
