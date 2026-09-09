@@ -10,6 +10,8 @@ from statistics import median
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.domain import RawOffer
 
+DEFAULT_FRESHNESS_DAYS = 7
+
 
 class DealClass(StrEnum):
     NORMAL = "NORMAL"
@@ -33,6 +35,7 @@ class DealResult:
     median_30d: Decimal | None
     median_90d: Decimal | None
     previous_price: Decimal | None
+    price_drop_pct: Decimal | None
     is_historical_low: bool
     reasons: tuple[str, ...]
 
@@ -43,7 +46,13 @@ def median_price(prices: list[Decimal]) -> Decimal | None:
 
 def condition_bucket(offer: RawOffer) -> str:
     value = (offer.condition_media or "").casefold()
-    return "new" if value.startswith("new") else "used" if value else "unknown"
+    if any(token in value for token in ("new", "sealed")): return "new"
+    if value in {"m", "nm", "m/nm"}: return "nm"
+    if value.startswith("ex"): return "ex"
+    if value.startswith("vg+"): return "vg+"
+    if value.startswith("vg"): return "vg"
+    if any(token in value for token in ("good", "g+", "g")): return "good"
+    return "unknown"
 
 
 def classify(discount: Decimal | None, comparable_count: int) -> DealClass:
@@ -57,33 +66,36 @@ def classify(discount: Decimal | None, comparable_count: int) -> DealClass:
     return DealClass.VERY_HOT
 
 
-def evaluate_offer(repository: SQLiteRepository, offer_id: int, *, now: datetime | None = None) -> DealResult | None:
+def evaluate_offer(repository: SQLiteRepository, offer_id: int, *, now: datetime | None = None, freshness_days: int = DEFAULT_FRESHNESS_DAYS) -> DealResult | None:
     target = repository.offer_by_id(offer_id)
-    if not target or target[1].price is None or target[0] is None:
+    if not target or target[1].price is None or target[1].price <= 0 or target[1].availability.value != "in_stock" or target[0] is None:
         return None
     release_id, offer = target
+    point = now or datetime.now(timezone.utc)
     comparables = repository.comparable_release_offers(release_id, condition_bucket(offer), exclude_offer_id=offer_id)
     # One store contributes at most one current price; lowest is the useful offer.
     by_store: dict[str, Decimal] = {}
     for _, other in comparables:
-        if other.price is not None:
+        if other.price is not None and other.price > 0 and other.fetched_at >= point - timedelta(days=freshness_days):
             by_store[other.source] = min(by_store.get(other.source, other.price), other.price)
     prices = list(by_store.values())
     market = median_price(prices)
     discount = ((market - offer.price) / market * 100) if market else None
     history = repository.price_history(offer_id)
     observed = [(datetime.fromisoformat(timestamp), price) for timestamp, price in history if price is not None]
-    point = now or datetime.now(timezone.utc)
     def window(days: int) -> Decimal | None:
         return median_price([price for timestamp, price in observed if timestamp >= point - timedelta(days=days)])
-    historical = min((price for _, price in observed), default=None)
+    previous_observed = observed[:-1]
+    historical = min((price for _, price in previous_observed), default=None)
     previous = observed[-2][1] if len(observed) > 1 else None
-    historical_low = bool(historical is not None and offer.price <= historical)
+    historical_low = bool(historical is not None and offer.price < historical)
+    price_drop = ((previous - offer.price) / previous * 100) if previous is not None and previous > offer.price else None
     reasons = [f"{len(prices)} comparable stores"]
     if market is None: reasons.append("market sample unavailable")
+    if len(prices) == 2: reasons.append("small market sample")
     if historical_low: reasons.append("new historical low")
-    if previous is not None and offer.price < previous: reasons.append("price dropped")
-    return DealResult(offer_id, release_id, offer.price, market, len(prices), discount, classify(discount, len(prices)), historical, window(30), window(90), previous, historical_low, tuple(reasons))
+    if price_drop is not None: reasons.append("price dropped")
+    return DealResult(offer_id, release_id, offer.price, market, len(prices), discount, classify(discount, len(prices)), historical, window(30), window(90), previous, price_drop, historical_low, tuple(reasons))
 
 
 def evaluate_deals(repository: SQLiteRepository, release_id: int | None = None) -> list[DealResult]:

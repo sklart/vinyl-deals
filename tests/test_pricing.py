@@ -34,7 +34,7 @@ def test_small_sample_conditions_and_history(tmp_path):
     result = evaluate_offer(repo, 1, now=now)
     assert result.comparable_count == 1
     assert result.deal_class == DealClass.INSUFFICIENT
-    assert result.historical_min == Decimal("50")
+    assert result.historical_min == Decimal("60")
     assert result.median_30d == Decimal("55")
     assert result.median_90d == Decimal("55")
     assert result.is_historical_low
@@ -45,3 +45,22 @@ def test_thresholds_and_old_price_do_not_affect_market(tmp_path):
     add(repo, "a", "1", 75, old_price=Decimal("10000")); add(repo, "b", "2", 100); add(repo, "c", "3", 100); add(repo, "d", "4", 100)
     build_match_queue(repo)
     assert evaluate_offer(repo, 1).deal_class == DealClass.HOT
+
+
+def test_target_eligibility_grades_freshness_and_history_low(tmp_path):
+    repo = SQLiteRepository(tmp_path / "hardening.sqlite3")
+    now = datetime(2026, 9, 9, tzinfo=timezone.utc)
+    add(repo, "a", "1", 50, condition="NM", when=now - timedelta(days=30))
+    add(repo, "a", "1", 40, condition="NM", when=now - timedelta(days=1))
+    add(repo, "b", "2", 100, condition="NM", when=now - timedelta(days=1))
+    add(repo, "c", "3", 100, condition="VG+", when=now - timedelta(days=1))
+    add(repo, "d", "4", 1000, condition="NM", when=now - timedelta(days=10))
+    add(repo, "e", "5", 0, condition="NM", when=now)
+    add(repo, "f", "6", 10, condition="NM", when=now, availability=Availability.OUT_OF_STOCK)
+    build_match_queue(repo)
+    result = evaluate_offer(repo, 1, now=now)
+    assert result.comparable_count == 0
+    assert result.price_drop_pct == Decimal("20")
+    assert result.is_historical_low
+    assert evaluate_offer(repo, 5, now=now) is None
+    assert evaluate_offer(repo, 6, now=now) is None
