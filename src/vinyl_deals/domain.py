@@ -1,0 +1,70 @@
+"""Stable domain types shared by store adapters and later persistence layers."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from decimal import Decimal
+from enum import StrEnum
+from typing import Any
+
+
+class Availability(StrEnum):
+    IN_STOCK = "in_stock"
+    OUT_OF_STOCK = "out_of_stock"
+    UNKNOWN = "unknown"
+
+
+class StoreState(StrEnum):
+    ACTIVE = "active"
+    DEGRADED = "degraded"
+
+
+@dataclass(frozen=True, slots=True)
+class RawOffer:
+    """Source-faithful offer. Normalisation and matching belong outside adapters."""
+
+    source: str
+    source_product_id: str
+    url: str
+    fetched_at: datetime
+    artist_raw: str | None = None
+    title_raw: str | None = None
+    edition_raw: str | None = None
+    price: Decimal | None = None
+    old_price: Decimal | None = None
+    currency: str = "RUB"
+    availability: Availability = Availability.UNKNOWN
+    stock_quantity: int | None = None
+    stock_text: str | None = None
+    city: str | None = None
+    local_store: bool = False
+    pickup_available: bool = False
+    delivery_available: bool = True
+    condition_media: str | None = None
+    condition_sleeve: str | None = None
+    format: str | None = None
+    vinyl_size: str | None = None
+    rpm: int | None = None
+    disc_count: int | None = None
+    label: str | None = None
+    catalog_number_raw: str | None = None
+    barcode: str | None = None
+    release_year: int | None = None
+    country: str | None = None
+    vinyl_color: str | None = None
+    edition_tags: tuple[str, ...] = ()
+    description: str | None = None
+    image_url: str | None = None
+    raw_data: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def now(cls, **values: Any) -> "RawOffer":
+        return cls(fetched_at=datetime.now(timezone.utc), **values)
+
+
+@dataclass(frozen=True, slots=True)
+class ScrapeResult:
+    offers: tuple[RawOffer, ...]
+    state: StoreState = StoreState.ACTIVE
+    warnings: tuple[str, ...] = ()

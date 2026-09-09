@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vinyl-deals"
+version = "0.1.0"
+description = "Conservative monitoring of vinyl-record offers in Russia"
+requires-python = ">=3.12"
+dependencies = [
+  "httpx>=0.27",
+  "pydantic>=2.7",
+  "SQLAlchemy>=2.0",
+]
+
+[project.scripts]
+vinyl-deals = "vinyl_deals.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vinyl_deals"]
