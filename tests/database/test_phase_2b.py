@@ -91,10 +91,19 @@ def test_legacy_database_is_upgraded_without_losing_offer_or_history(tmp_path):
     path = tmp_path / "legacy.sqlite3"
     with sqlite3.connect(path) as connection:
         connection.executescript("""
+            CREATE TABLE raw_products (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_product_id TEXT NOT NULL, fetched_at TEXT NOT NULL, payload_json TEXT NOT NULL, UNIQUE(source, source_product_id));
             CREATE TABLE offers (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_product_id TEXT NOT NULL, url TEXT NOT NULL, artist_raw TEXT, title_raw TEXT, barcode TEXT, catalog_number_raw TEXT, label TEXT, country TEXT, release_year INTEGER, format TEXT, disc_count INTEGER, rpm INTEGER, vinyl_color TEXT, edition_tags TEXT NOT NULL DEFAULT '[]', condition_media TEXT, price TEXT, availability TEXT NOT NULL, last_seen TEXT NOT NULL, UNIQUE(source, source_product_id));
             CREATE TABLE price_history (id INTEGER PRIMARY KEY, offer_id INTEGER NOT NULL, observed_at TEXT NOT NULL, price TEXT, old_price TEXT, availability TEXT NOT NULL);
+            CREATE TABLE releases (id INTEGER PRIMARY KEY, artist TEXT NOT NULL, title TEXT NOT NULL, barcode TEXT, label TEXT, catalog_number TEXT, release_year INTEGER, country TEXT, format TEXT, disc_count INTEGER, vinyl_size TEXT, rpm INTEGER, vinyl_color TEXT, edition_tags TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE release_matches (id INTEGER PRIMARY KEY, offer_id INTEGER NOT NULL, release_id INTEGER, candidate_offer_id INTEGER, kind TEXT NOT NULL, confidence REAL NOT NULL, reasons TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, UNIQUE(offer_id, candidate_offer_id));
+            CREATE TABLE manual_match_decisions (id INTEGER PRIMARY KEY, offer_id INTEGER NOT NULL, candidate_offer_id INTEGER NOT NULL, decision TEXT NOT NULL, note TEXT, decided_at TEXT NOT NULL, UNIQUE(offer_id, candidate_offer_id));
+            INSERT INTO raw_products(source, source_product_id, fetched_at, payload_json) VALUES ('legacy', '1', '2025-01-01T00:00:00+00:00', '{"origin":"legacy"}');
             INSERT INTO offers(source, source_product_id, url, artist_raw, title_raw, barcode, edition_tags, price, availability, last_seen) VALUES ('legacy', '1', 'https://legacy/1', 'Artist', 'Album', '4006381333931', '["limited"]', '1000', 'in_stock', '2025-01-01T00:00:00+00:00');
+            INSERT INTO offers(source, source_product_id, url, artist_raw, title_raw, edition_tags, price, availability, last_seen) VALUES ('legacy', '2', 'https://legacy/2', 'Artist', 'Album 2', '[]', '900', 'in_stock', '2025-01-01T00:00:00+00:00');
             INSERT INTO price_history(offer_id, observed_at, price, availability) VALUES (1, '2025-01-01T00:00:00+00:00', '1000', 'in_stock');
+            INSERT INTO releases(artist, title, edition_tags, created_at, updated_at) VALUES ('Artist', 'Album', '[]', 'now', 'now');
+            INSERT INTO release_matches(offer_id, release_id, candidate_offer_id, kind, confidence, reasons, created_at) VALUES (1, 1, 2, 'possible', 0.5, '[]', 'now');
+            INSERT INTO manual_match_decisions(offer_id, candidate_offer_id, decision, decided_at) VALUES (1, 2, 'ignore', 'now');
         """)
     repository = SQLiteRepository(path)
     assert repository.schema_version() == CURRENT_VERSION
@@ -103,6 +112,10 @@ def test_legacy_database_is_upgraded_without_losing_offer_or_history(tmp_path):
         columns = {row[1] for row in connection.execute("PRAGMA table_info(offers)")}
         assert {"store_sku", "first_seen", "last_seen", "offer_json"} <= columns
         assert connection.execute("SELECT COUNT(*) FROM price_history").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM raw_products").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM releases").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM release_matches").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM manual_match_decisions").fetchone()[0] == 1
         assert connection.execute("SELECT offer_json FROM offers").fetchone()[0] != "{}"
     add(repository, "fresh", "2")
-    assert len(repository.offers_for_matching()) == 2
+    assert len(repository.offers_for_matching()) == 3

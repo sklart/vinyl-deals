@@ -90,7 +90,7 @@ def _backfill_offer_json(connection: sqlite3.Connection) -> None:
 def migrate_v2(connection: sqlite3.Connection) -> None:
     additions = {
         "store_sku": "TEXT", "first_seen": "TEXT", "offer_json": "TEXT NOT NULL DEFAULT '{}'",
-        "condition_sleeve": "TEXT", "vinyl_size": "TEXT",
+        "condition_sleeve": "TEXT", "vinyl_size": "TEXT", "release_id": "INTEGER REFERENCES releases(id)",
     }
     columns = _columns(connection, "offers")
     for name, definition in additions.items():
