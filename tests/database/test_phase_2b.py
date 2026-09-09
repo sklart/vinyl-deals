@@ -131,6 +131,33 @@ def test_standalone_rebuild_commits_and_is_idempotent(tmp_path):
     assert release_ids(path) == first
 
 
+def test_standalone_rebuild_removes_empty_release(tmp_path):
+    path = tmp_path / "empty.sqlite3"
+    repository = SQLiteRepository(path)
+    repository.initialize()
+    with repository._connect() as connection:
+        release_id = connection.execute("INSERT INTO releases(artist, title, edition_tags, created_at, updated_at) VALUES ('A', 'B', '[]', 'now', 'now')").lastrowid
+    repository.rebuild_release_cluster(release_id)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM releases WHERE id=?", (release_id,)).fetchone()[0] == 0
+    assert repository.cleanup_empty_releases() == 0
+
+
+def test_standalone_merge_rolls_back_when_metadata_refresh_fails(tmp_path, monkeypatch):
+    path = tmp_path / "merge-rollback.sqlite3"
+    repository = SQLiteRepository(path)
+    add(repository, "a", "1"); add(repository, "b", "2")
+    build_match_queue(repository)
+    first = release_ids(path)[0]
+    with repository._connect() as connection:
+        second = repository._create_release_from_offer(connection, 2)
+        connection.execute("UPDATE offers SET release_id=? WHERE id=2", (second,))
+    monkeypatch.setattr(repository, "_refresh_release_metadata", lambda *_: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        repository.merge_releases(first, second)
+    assert release_ids(path) == [first, second]
+
+
 def test_legacy_database_is_upgraded_without_losing_offer_or_history(tmp_path):
     path = tmp_path / "legacy.sqlite3"
     with sqlite3.connect(path) as connection:

@@ -8,7 +8,7 @@ from pathlib import Path
 from decimal import Decimal
 from vinyl_deals.domain import Availability, RawOffer
 from vinyl_deals.database.migrations import CURRENT_VERSION, migrate
-from vinyl_deals.matching.normalize import normalize_barcode, tags
+from vinyl_deals.matching.normalize import normalize_barcode
 from vinyl_deals.matching import match_offers, MatchKind
 
 
@@ -294,26 +294,6 @@ class SQLiteRepository:
         if first_barcode and second_barcode and first_barcode != second_barcode:
             raise ReleaseMergeConflict("Cannot merge releases: valid barcodes differ.")
 
-    def _merge_release_metadata(self, connection: sqlite3.Connection, canonical_id: int, redundant_id: int) -> None:
-        cursor = connection.execute("SELECT * FROM releases WHERE id IN (?, ?) ORDER BY id", (canonical_id, redundant_id))
-        columns = [item[0] for item in cursor.description]
-        values = {row[0]: dict(zip(columns, row, strict=True)) for row in cursor.fetchall()}
-        canonical, redundant = values[canonical_id], values[redundant_id]
-        update = {}
-        for field in ("barcode", "label", "catalog_number", "release_year", "country", "format", "disc_count", "vinyl_size", "rpm", "vinyl_color"):
-            if canonical[field] is None and redundant[field] is not None:
-                update[field] = redundant[field]
-        canonical_tags = tuple(json.loads(canonical["edition_tags"] or "[]"))
-        redundant_tags = tuple(json.loads(redundant["edition_tags"] or "[]"))
-        merged_tags = tags(canonical_tags) | tags(redundant_tags)
-        incompatible = ({"mono", "stereo"}, {"picture_disc", "black"}, {"colored", "black"}, {"box_set", "single"})
-        if not any(len(merged_tags & group) > 1 for group in incompatible):
-            update["edition_tags"] = json.dumps(sorted(merged_tags), ensure_ascii=False)
-        if update:
-            update["updated_at"] = datetime.now(timezone.utc).isoformat()
-            assignments = ", ".join(f"{field}=?" for field in update)
-            connection.execute(f"UPDATE releases SET {assignments} WHERE id=?", (*update.values(), canonical_id))
-
     def rebuild_release_cluster(self, release_id: int, connection: sqlite3.Connection | None = None) -> None:
         self.initialize() if connection is None else None
         owns_connection = connection is None
@@ -323,6 +303,7 @@ class SQLiteRepository:
             offer_ids = [row[0] for row in connection.execute("SELECT id FROM offers WHERE release_id=?", (release_id,))]
             if not offer_ids:
                 self.cleanup_empty_releases(connection)
+                completed = True
                 return
             parent = {offer_id: offer_id for offer_id in offer_ids}
             def find(item: int) -> int:
