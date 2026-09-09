@@ -103,6 +103,34 @@ def test_transitive_bridge_never_creates_an_incompatible_cluster(tmp_path, field
         assert repository.validate_release_invariants(release_id) == []
 
 
+def test_manual_same_unassigned_incompatible_offers_is_rejected(tmp_path):
+    path = tmp_path / "unassigned.sqlite3"
+    repository = SQLiteRepository(path)
+    add(repository, "a", "1", format="LP")
+    add(repository, "b", "2", format="CD")
+    repository.record_match(1, 2, "possible", 0.6, ())
+    with pytest.raises(ReleaseMergeConflict):
+        repository.decide_match(1, 2, "same_release")
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM releases").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM offers WHERE release_id IS NOT NULL").fetchone()[0] == 0
+        assert connection.execute("SELECT status FROM release_matches").fetchone()[0] == "pending"
+    assert repository.manual_decision(1, 2) is None
+
+
+def test_standalone_rebuild_commits_and_is_idempotent(tmp_path):
+    path = tmp_path / "rebuild.sqlite3"
+    repository = SQLiteRepository(path)
+    add(repository, "a", "1"); add(repository, "b", "2")
+    build_match_queue(repository)
+    release_id = release_ids(path)[0]
+    repository.rebuild_release_cluster(release_id)
+    first = release_ids(path)
+    repository.rebuild_release_cluster(release_id)
+    repository.rebuild_release_cluster(release_id)
+    assert release_ids(path) == first
+
+
 def test_legacy_database_is_upgraded_without_losing_offer_or_history(tmp_path):
     path = tmp_path / "legacy.sqlite3"
     with sqlite3.connect(path) as connection:

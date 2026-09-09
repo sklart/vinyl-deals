@@ -177,6 +177,9 @@ class SQLiteRepository:
                 if conflict:
                     raise ReleaseMergeConflict(f"Cannot join Release {release_id}: {conflict}")
             else:
+                conflict = self.find_cluster_conflict(connection, {offer_id}, {candidate_offer_id})
+                if conflict:
+                    raise ReleaseMergeConflict(f"Cannot create Release: {conflict}")
                 cursor = connection.execute("INSERT INTO releases(artist,title,barcode,label,catalog_number,release_year,country,format,disc_count,vinyl_size,rpm,vinyl_color,edition_tags,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (pick("artist_raw"), pick("title_raw"), pick("barcode"), pick("label"), pick("catalog_number_raw"), pick("release_year"), pick("country"), pick("format"), pick("disc_count"), pick("vinyl_size"), pick("rpm"), pick("vinyl_color"), json.dumps(pick("edition_tags"), ensure_ascii=False), now, now))
                 release_id = cursor.lastrowid
             connection.execute("UPDATE offers SET release_id=? WHERE id IN (?,?)", (release_id, offer_id, candidate_offer_id))
@@ -194,17 +197,18 @@ class SQLiteRepository:
         self.initialize() if connection is None else None
         owns_connection = connection is None
         if connection is None: connection = self._connect()
+        completed = False
         try:
             self._validate_release_merge(connection, canonical_id, redundant_id)
             connection.execute("UPDATE offers SET release_id=? WHERE release_id=?", (canonical_id, redundant_id))
             connection.execute("UPDATE release_matches SET release_id=? WHERE release_id=?", (canonical_id, redundant_id))
             connection.execute("DELETE FROM releases WHERE id=?", (redundant_id,))
             self._refresh_release_metadata(connection, canonical_id)
-            if owns_connection: connection.commit()
+            completed = True
             return canonical_id
         finally:
             if owns_connection:
-                connection.commit()
+                (connection.commit if completed else connection.rollback)()
                 connection.close()
 
     def _manual_same_component(self, connection: sqlite3.Connection, offer_id: int) -> set[int]:
@@ -314,6 +318,7 @@ class SQLiteRepository:
         self.initialize() if connection is None else None
         owns_connection = connection is None
         if connection is None: connection = self._connect()
+        completed = False
         try:
             offer_ids = [row[0] for row in connection.execute("SELECT id FROM offers WHERE release_id=?", (release_id,))]
             if not offer_ids:
@@ -357,8 +362,11 @@ class SQLiteRepository:
                 marks = ",".join("?" for _ in ids)
                 connection.execute(f"UPDATE release_matches SET release_id=? WHERE offer_id IN ({marks}) AND candidate_offer_id IN ({marks})", (release, *ids, *ids))
             self.cleanup_empty_releases(connection)
+            completed = True
         finally:
-            if owns_connection: connection.close()
+            if owns_connection:
+                (connection.commit if completed else connection.rollback)()
+                connection.close()
 
     def _create_release_from_offer(self, connection: sqlite3.Connection, offer_id: int) -> int:
         payload = connection.execute("SELECT offer_json FROM offers WHERE id=?", (offer_id,)).fetchone()[0]
