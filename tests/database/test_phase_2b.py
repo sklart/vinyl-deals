@@ -87,6 +87,22 @@ def test_repeated_queue_build_is_idempotent(tmp_path):
     assert repository.manual_decision(1, 2) == "different_release"
 
 
+@pytest.mark.parametrize("field, left, right", [("format", "LP", "CD"), ("disc_count", 1, 2)])
+def test_transitive_bridge_never_creates_an_incompatible_cluster(tmp_path, field, left, right):
+    path = tmp_path / "bridge.sqlite3"
+    repository = SQLiteRepository(path)
+    add(repository, "a", "1", **{field: left})
+    add(repository, "b", "2")
+    add(repository, "c", "3", **{field: right})
+    build_match_queue(repository)
+    with sqlite3.connect(path) as connection:
+        releases = connection.execute("SELECT release_id FROM offers ORDER BY id").fetchall()
+        assert len({row[0] for row in releases}) > 1
+        assert connection.execute("SELECT COUNT(*) FROM releases").fetchone()[0] == 1
+    for release_id in {row[0] for row in releases if row[0] is not None}:
+        assert repository.validate_release_invariants(release_id) == []
+
+
 def test_legacy_database_is_upgraded_without_losing_offer_or_history(tmp_path):
     path = tmp_path / "legacy.sqlite3"
     with sqlite3.connect(path) as connection:

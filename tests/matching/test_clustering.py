@@ -1,5 +1,7 @@
 import sqlite3
+import pytest
 from vinyl_deals.database import SQLiteRepository
+from vinyl_deals.database.repository import ReleaseMergeConflict
 from vinyl_deals.domain import RawOffer
 from vinyl_deals.matching.service import build_match_queue
 
@@ -22,10 +24,12 @@ def test_manual_different_blocks_rebuild(tmp_path):
 def test_manual_same_merges_previously_separate_releases(tmp_path):
     database = tmp_path / "merge.sqlite3"; repo = SQLiteRepository(database)
     add(repo, "a", "1", "4006381333931"); add(repo, "b", "2", "4006381333931"); add(repo, "c", "c", "5901234123457"); add(repo, "d", "4", "5901234123457"); build_match_queue(repo)
-    repo.record_match(2, 3, "possible", .6, ()); repo.decide_match(2, 3, "same_release")
+    repo.record_match(2, 3, "possible", .6, ())
+    with pytest.raises(ReleaseMergeConflict):
+        repo.decide_match(2, 3, "same_release")
     with sqlite3.connect(database) as c:
-        assert c.execute("SELECT COUNT(*) FROM releases").fetchone()[0] == 1
-        assert c.execute("SELECT COUNT(DISTINCT release_id) FROM offers").fetchone()[0] == 1
+        assert c.execute("SELECT COUNT(*) FROM releases").fetchone()[0] == 2
+        assert c.execute("SELECT COUNT(DISTINCT release_id) FROM offers").fetchone()[0] == 2
 
 def test_ignore_stays_out_of_pending_queue(tmp_path):
     database = tmp_path / "ignore.sqlite3"; repo = SQLiteRepository(database)
