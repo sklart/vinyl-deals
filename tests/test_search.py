@@ -4,6 +4,7 @@ from decimal import Decimal
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.domain import Availability, RawOffer, Release
 from vinyl_deals.matching.service import build_match_queue
+from vinyl_deals.matching.normalize import text
 from vinyl_deals.search import discogs_search_url, search_releases
 
 
@@ -51,6 +52,32 @@ def test_current_offers_and_best_offer_exclude_out_of_stock_and_stale(tmp_path):
     assert result.best_offer is not None
     assert result.best_offer.store == "imagine"
     assert result.best_offer.price == Decimal("5490")
+
+
+def test_explicit_best_prices_separate_new_used_and_lowest(tmp_path):
+    repo = SQLiteRepository(tmp_path / "best-prices.sqlite3")
+    add(repo, "new-store", "1", 8000, condition="NEW")
+    add(repo, "used-store", "2", 4000, condition="NM")
+    add(repo, "unknown-store", "3", 3000, condition="ungraded")
+    add(repo, "sold-store", "4", 100, condition="NEW", availability=Availability.OUT_OF_STOCK)
+    add(repo, "stale-store", "5", 200, condition="NM", when=NOW - timedelta(days=8))
+    build_match_queue(repo)
+
+    result = search_releases(repo, title="Blackwater Park", now=NOW)[0]
+    assert result.best_new_offer.price == Decimal("8000")
+    assert result.best_used_offer.price == Decimal("4000")
+    assert result.lowest_price_offer.price == Decimal("3000")
+    assert result.best_offer.price == Decimal("8000")
+
+
+def test_release_uses_nonempty_semantically_equivalent_artist_and_title(tmp_path):
+    repo = SQLiteRepository(tmp_path / "release-text.sqlite3")
+    add(repo, "one", "1", 100, artist="OPETH", title="Blackwater   Park")
+    add(repo, "two", "2", 110, artist="Opeth", title="Blackwater Park")
+    build_match_queue(repo)
+    release = repo.releases_for_search()[0]
+    assert text(release.artist) == "opeth"
+    assert text(release.title) == "blackwater park"
 
 
 def test_discogs_url_prefers_barcode_then_catalog_and_label():

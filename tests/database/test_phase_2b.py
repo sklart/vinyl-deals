@@ -33,6 +33,29 @@ def test_manual_different_rebuilds_an_existing_auto_cluster(tmp_path):
     assert repository.manual_decision(2, 1) == "different_release"
 
 
+def test_rebuild_split_refreshes_artist_and_title_from_component_offer(tmp_path):
+    path = tmp_path / "split-text.sqlite3"
+    repository = SQLiteRepository(path)
+    repository.upsert_offer(RawOffer.now(source="empty", source_product_id="1", url="https://empty/1", artist_raw=None, title_raw=None, barcode="4006381333931"))
+    repository.upsert_offer(RawOffer.now(source="complete", source_product_id="2", url="https://complete/2", artist_raw="Artist", title_raw="Album", barcode="4006381333931"))
+    offers = dict(repository.offers_for_matching())
+    repository.create_release_for_pair(1, 2, offers[1], offers[2])
+    repository.decide_match(1, 2, "different_release")
+    releases = {release.id: release for release in repository.releases_for_search()}
+    complete_release = next(release for release in releases.values() if release.artist == "Artist")
+    assert complete_release.title == "Album"
+
+
+def test_conflicting_artist_title_are_not_arbitrarily_aggregated(tmp_path):
+    repository = SQLiteRepository(tmp_path / "conflicting-text.sqlite3")
+    metadata = repository.aggregate_release_metadata([
+        RawOffer.now(source="one", source_product_id="1", url="https://one", artist_raw="Artist One", title_raw="Album One"),
+        RawOffer.now(source="two", source_product_id="2", url="https://two", artist_raw="Artist Two", title_raw="Album Two"),
+    ])
+    assert "artist" not in metadata
+    assert "title" not in metadata
+
+
 def test_manual_different_blocks_cross_cluster_merge(tmp_path):
     path = tmp_path / "merge.sqlite3"
     repository = SQLiteRepository(path)

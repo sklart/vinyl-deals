@@ -19,6 +19,8 @@ def test_search_command_prints_release_offers_and_discogs(tmp_path, monkeypatch,
     assert main() == 0
     output = capsys.readouterr().out
     assert "Opeth — Blackwater Park" in output
-    assert "BEST: imagine — 5490 RUB" in output
+    assert "Lowest price: imagine — 5490 RUB" in output
+    assert "Best new: imagine — 5490 RUB" in output
+    assert "Best used: unavailable" in output
     assert "collectomania" in output
     assert "Discogs: https://www.discogs.com/search/?q=4006381333931&type=all" in output

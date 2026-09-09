@@ -69,10 +69,11 @@ def main() -> int:
         for result in results:
             metadata = " / ".join(str(value) for value in (result.label, result.catalog_number, result.release_year, result.format) if value)
             print(f"{result.artist} — {result.title}\n{metadata or '-'}\n")
-            if result.best_offer:
-                print(f"BEST: {result.best_offer.store} — {result.best_offer.price} RUB\n")
-            else:
-                print("BEST: unavailable\n")
+            def best_line(name, offer):
+                return f"{name}: {offer.store} — {offer.price} RUB" if offer else f"{name}: unavailable"
+            print(best_line("Lowest price", result.lowest_price_offer))
+            print(best_line("Best new", result.best_new_offer))
+            print(best_line("Best used", result.best_used_offer) + "\n")
             for offer in result.offers:
                 price = f"{offer.price} RUB" if offer.price is not None else "-"
                 availability = "" if offer.availability.value == "in_stock" else f" ({offer.availability.value})"

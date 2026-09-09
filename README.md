@@ -46,5 +46,6 @@ historical low or a price drop of at least 10%; they remain labelled
 
 `vinyl-deals search` searches matched Releases by artist, title, barcode,
 catalogue number, label, year and format. It shows fresh offers from the
-supported stores, a condition-safe best current price and a Discogs *search*
-link; it does not claim a specific Discogs release match.
+supported stores, the absolute lowest price plus separate trusted best new and
+best used prices, and a Discogs *search* link; it does not claim a specific
+Discogs release match.

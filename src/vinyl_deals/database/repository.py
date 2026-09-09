@@ -8,7 +8,7 @@ from pathlib import Path
 from decimal import Decimal
 from vinyl_deals.domain import Availability, RawOffer, Release
 from vinyl_deals.database.migrations import CURRENT_VERSION, migrate
-from vinyl_deals.matching.normalize import normalize_barcode
+from vinyl_deals.matching.normalize import normalize_barcode, text
 from vinyl_deals.matching import match_offers, MatchKind
 
 
@@ -403,6 +403,10 @@ class SQLiteRepository:
     def aggregate_release_metadata(self, offers: list[RawOffer]) -> dict[str, object]:
         fields = {"barcode": "barcode", "label": "label", "catalog_number": "catalog_number_raw", "release_year": "release_year", "country": "country", "format": "format", "disc_count": "disc_count", "vinyl_size": "vinyl_size", "rpm": "rpm", "vinyl_color": "vinyl_color"}
         metadata: dict[str, object] = {"edition_tags": json.dumps(self.merge_raw_edition_tags(offers), ensure_ascii=False)}
+        for output, attribute in {"artist": "artist_raw", "title": "title_raw"}.items():
+            values = [value.strip() for offer in offers if (value := getattr(offer, attribute)) and value.strip()]
+            if values and len({text(value) for value in values}) == 1:
+                metadata[output] = values[0]
         for output, attribute in fields.items():
             values = {getattr(offer, attribute) for offer in offers if getattr(offer, attribute) is not None}
             metadata[output] = next(iter(values)) if len(values) == 1 else None

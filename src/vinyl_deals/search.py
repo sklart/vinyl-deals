@@ -36,8 +36,15 @@ class ReleaseSearchResult:
     release_year: int | None
     format: str | None
     offers: tuple[OfferSearchResult, ...]
-    best_offer: OfferSearchResult | None
+    best_new_offer: OfferSearchResult | None
+    best_used_offer: OfferSearchResult | None
+    lowest_price_offer: OfferSearchResult | None
     discogs_url: str | None
+
+    @property
+    def best_offer(self) -> OfferSearchResult | None:
+        """Deprecated compatibility alias; prefer the explicit best fields."""
+        return self.best_new_offer or self.best_used_offer
 
 
 def discogs_search_url(release: Release) -> str | None:
@@ -81,29 +88,40 @@ def search_offers(repository: SQLiteRepository, release_id: int, *, now: datetim
     return tuple(sorted(results, key=lambda item: (item.availability != Availability.IN_STOCK, item.price is None, item.price or Decimal("0"), item.store.casefold(), item.offer_id)))
 
 
-def find_best_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult | None:
-    """Select the lowest price within one trusted media-condition grade.
+def _available(offers: tuple[OfferSearchResult, ...]) -> list[OfferSearchResult]:
+    return [offer for offer in offers if offer.availability == Availability.IN_STOCK and offer.price is not None and offer.price > 0]
 
-    New/sealed is preferred when present; otherwise grades are considered from
-    strongest to weakest. Unknown condition never becomes a price benchmark.
-    """
-    buckets: dict[str, list[OfferSearchResult]] = {}
-    for result in offers:
-        if result.availability != Availability.IN_STOCK or result.price is None or result.price <= 0:
-            continue
-        offer_bucket = condition_bucket(RawOffer(source=result.store, source_product_id=str(result.offer_id), url=result.url, fetched_at=datetime.now(timezone.utc), condition_media=result.condition))
-        if offer_bucket != "unknown":
-            buckets.setdefault(offer_bucket, []).append(result)
-    for bucket in ("new", "nm", "ex", "vg+", "vg", "good"):
-        if candidates := buckets.get(bucket):
-            return min(candidates, key=lambda item: (item.price, item.store.casefold(), item.offer_id))
-    return None
+
+def _bucket(offer: OfferSearchResult) -> str:
+    return condition_bucket(RawOffer(source=offer.store, source_product_id=str(offer.offer_id), url=offer.url, fetched_at=datetime.now(timezone.utc), condition_media=offer.condition))
+
+
+def _lowest(offers: list[OfferSearchResult]) -> OfferSearchResult | None:
+    return min(offers, key=lambda item: (item.price, item.store.casefold(), item.offer_id)) if offers else None
+
+
+def find_best_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult | None:
+    """Deprecated alias for the previous trusted-best selection policy."""
+    return find_best_new_offer(offers) or find_best_used_offer(offers)
+
+
+def find_best_new_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult | None:
+    return _lowest([offer for offer in _available(offers) if _bucket(offer) == "new"])
+
+
+def find_best_used_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult | None:
+    return _lowest([offer for offer in _available(offers) if _bucket(offer) in {"nm", "ex", "vg+", "vg", "good"}])
+
+
+def find_lowest_price_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult | None:
+    """Lowest current available price; condition is deliberately not a filter."""
+    return _lowest(_available(offers))
 
 
 def search_releases(repository: SQLiteRepository, *, artist: str | None = None, title: str | None = None, barcode: str | None = None, catalog: str | None = None, label: str | None = None, year: int | None = None, format: str | None = None, now: datetime | None = None, freshness_days: int = DEFAULT_FRESHNESS_DAYS) -> list[ReleaseSearchResult]:
     """Find Releases using normalized AND semantics for every supplied field."""
     return [
-        ReleaseSearchResult(release.id, release.artist, release.title, release.label, release.catalog_number, release.barcode, release.release_year, release.format, offers := search_offers(repository, release.id, now=now, freshness_days=freshness_days), find_best_offer(offers), discogs_search_url(release))
+        ReleaseSearchResult(release.id, release.artist, release.title, release.label, release.catalog_number, release.barcode, release.release_year, release.format, offers := search_offers(repository, release.id, now=now, freshness_days=freshness_days), find_best_new_offer(offers), find_best_used_offer(offers), find_lowest_price_offer(offers), discogs_search_url(release))
         for release in repository.releases_for_search()
         if _matches(release, artist=artist, title=title, barcode=barcode, catalog=catalog, label=label, year=year, format=format)
     ]
