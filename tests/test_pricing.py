@@ -4,7 +4,7 @@ from decimal import Decimal
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.domain import Availability, RawOffer
 from vinyl_deals.matching.service import build_match_queue
-from vinyl_deals.pricing import DealClass, evaluate_offer, median_price
+from vinyl_deals.pricing import DealClass, classify, evaluate_offer, median_price
 
 
 def add(repo, source, product, price, *, condition="NEW", when=None, availability=Availability.IN_STOCK, old_price=None):
@@ -37,6 +37,7 @@ def test_small_sample_conditions_and_history(tmp_path):
     assert result.historical_min == Decimal("60")
     assert result.median_30d == Decimal("55")
     assert result.median_90d == Decimal("55")
+    assert result.minimum_90d == Decimal("50")
     assert result.is_historical_low
 
 
@@ -59,8 +60,51 @@ def test_target_eligibility_grades_freshness_and_history_low(tmp_path):
     add(repo, "f", "6", 10, condition="NM", when=now, availability=Availability.OUT_OF_STOCK)
     build_match_queue(repo)
     result = evaluate_offer(repo, 1, now=now)
-    assert result.comparable_count == 0
+    assert result.comparable_count == 1
+    assert result.market_median == Decimal("100")
     assert result.price_drop_pct == Decimal("20")
     assert result.is_historical_low
     assert evaluate_offer(repo, 5, now=now) is None
     assert evaluate_offer(repo, 6, now=now) is None
+
+
+def test_grade_compatibility_and_one_store_deduplication(tmp_path):
+    repo = SQLiteRepository(tmp_path / "conditions.sqlite3")
+    now = datetime(2026, 9, 9, tzinfo=timezone.utc)
+    add(repo, "target", "1", 70, condition="NM", when=now)
+    add(repo, "shop-a", "2", 100, condition="NM", when=now)
+    add(repo, "shop-a", "3", 200, condition="NM", when=now)
+    add(repo, "shop-b", "4", 100, condition="NM", when=now)
+    add(repo, "used", "5", 20, condition="VG+", when=now)
+    add(repo, "sealed", "6", 20, condition="NEW", when=now)
+    build_match_queue(repo)
+
+    result = evaluate_offer(repo, 1, now=now)
+    assert result.comparable_count == 2
+    assert result.market_median == Decimal("100")
+    assert result.deal_class == DealClass.GOOD
+    assert "small market sample" in result.reasons
+
+
+def test_first_or_equal_price_is_not_a_new_historical_low(tmp_path):
+    repo = SQLiteRepository(tmp_path / "equal-history.sqlite3")
+    now = datetime(2026, 9, 9, tzinfo=timezone.utc)
+    add(repo, "a", "1", 50, when=now - timedelta(days=2))
+    add(repo, "a", "1", 50, when=now - timedelta(days=1))
+    add(repo, "b", "2", 100, when=now)
+    build_match_queue(repo)
+
+    result = evaluate_offer(repo, 1, now=now)
+    assert result.historical_min == Decimal("50")
+    assert not result.is_historical_low
+    assert result.price_drop_pct is None
+
+
+def test_classification_boundaries_and_sample_sizes():
+    assert classify(Decimal("9.99"), 3) == DealClass.NORMAL
+    assert classify(Decimal("10"), 3) == DealClass.INTERESTING
+    assert classify(Decimal("15"), 3) == DealClass.GOOD
+    assert classify(Decimal("25"), 3) == DealClass.HOT
+    assert classify(Decimal("35"), 3) == DealClass.VERY_HOT
+    assert classify(Decimal("40"), 2) == DealClass.GOOD
+    assert classify(Decimal("40"), 1) == DealClass.INSUFFICIENT

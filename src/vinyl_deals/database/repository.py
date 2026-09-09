@@ -171,15 +171,12 @@ class SQLiteRepository:
                 return [row[0] for row in connection.execute("SELECT id FROM offers WHERE release_id IS NOT NULL")]
             return [row[0] for row in connection.execute("SELECT id FROM offers WHERE release_id=?", (release_id,))]
 
-    def comparable_release_offers(self, release_id: int, condition: str, exclude_offer_id: int | None = None) -> list[tuple[int, RawOffer]]:
+    def comparable_release_offers(self, release_id: int, exclude_offer_id: int | None = None) -> list[tuple[int, RawOffer]]:
+        """Return current stock offers for a Release; pricing applies condition policy."""
         self.initialize()
         with self._connect() as connection:
             rows = connection.execute("SELECT id, offer_json FROM offers WHERE release_id=? AND availability='in_stock' AND price IS NOT NULL", (release_id,)).fetchall()
-        offers = [(offer_id, _deserialize_offer(payload)) for offer_id, payload in rows if offer_id != exclude_offer_id]
-        def bucket(offer: RawOffer) -> str:
-            value = (offer.condition_media or "").casefold()
-            return "new" if value.startswith("new") else "used" if value else "unknown"
-        return [(offer_id, offer) for offer_id, offer in offers if bucket(offer) == condition]
+        return [(offer_id, _deserialize_offer(payload)) for offer_id, payload in rows if offer_id != exclude_offer_id]
 
     def price_history(self, offer_id: int) -> list[tuple[str, Decimal | None]]:
         self.initialize()

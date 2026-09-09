@@ -33,6 +33,7 @@ foreign keys, канонизирует пары offer id и умеет обно�
 Telegram, Web UI и новые магазины пока намеренно не реализованы.
 
 Phase 3 adds conservative deal detection for matched releases: market median
-uses in-stock, same-condition offers and one price per store; historical price
-signals come from `price_history`. Shipping and store-sale `old_price` are not
-used as market-deal evidence.
+uses only fresh (7 days by default), in-stock, same-condition offers and one
+price per store. `vinyl-deals deals` explains the market sample, historical
+minimum, 30/90-day median, price drop and the deal class. Shipping and
+store-sale `old_price` are not used as market-deal evidence.

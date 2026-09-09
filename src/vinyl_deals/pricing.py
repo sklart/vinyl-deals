@@ -34,6 +34,7 @@ class DealResult:
     historical_min: Decimal | None
     median_30d: Decimal | None
     median_90d: Decimal | None
+    minimum_90d: Decimal | None
     previous_price: Decimal | None
     price_drop_pct: Decimal | None
     is_historical_low: bool
@@ -72,11 +73,16 @@ def evaluate_offer(repository: SQLiteRepository, offer_id: int, *, now: datetime
         return None
     release_id, offer = target
     point = now or datetime.now(timezone.utc)
-    comparables = repository.comparable_release_offers(release_id, condition_bucket(offer), exclude_offer_id=offer_id)
+    comparables = repository.comparable_release_offers(release_id, exclude_offer_id=offer_id)
     # One store contributes at most one current price; lowest is the useful offer.
     by_store: dict[str, Decimal] = {}
     for _, other in comparables:
-        if other.price is not None and other.price > 0 and other.fetched_at >= point - timedelta(days=freshness_days):
+        if (
+            condition_bucket(other) == condition_bucket(offer)
+            and other.price is not None
+            and other.price > 0
+            and other.fetched_at >= point - timedelta(days=freshness_days)
+        ):
             by_store[other.source] = min(by_store.get(other.source, other.price), other.price)
     prices = list(by_store.values())
     market = median_price(prices)
@@ -85,6 +91,8 @@ def evaluate_offer(repository: SQLiteRepository, offer_id: int, *, now: datetime
     observed = [(datetime.fromisoformat(timestamp), price) for timestamp, price in history if price is not None]
     def window(days: int) -> Decimal | None:
         return median_price([price for timestamp, price in observed if timestamp >= point - timedelta(days=days)])
+    def window_minimum(days: int) -> Decimal | None:
+        return min((price for timestamp, price in observed if timestamp >= point - timedelta(days=days)), default=None)
     previous_observed = observed[:-1]
     historical = min((price for _, price in previous_observed), default=None)
     previous = observed[-2][1] if len(observed) > 1 else None
@@ -95,7 +103,7 @@ def evaluate_offer(repository: SQLiteRepository, offer_id: int, *, now: datetime
     if len(prices) == 2: reasons.append("small market sample")
     if historical_low: reasons.append("new historical low")
     if price_drop is not None: reasons.append("price dropped")
-    return DealResult(offer_id, release_id, offer.price, market, len(prices), discount, classify(discount, len(prices)), historical, window(30), window(90), previous, price_drop, historical_low, tuple(reasons))
+    return DealResult(offer_id, release_id, offer.price, market, len(prices), discount, classify(discount, len(prices)), historical, window(30), window(90), window_minimum(90), previous, price_drop, historical_low, tuple(reasons))
 
 
 def evaluate_deals(repository: SQLiteRepository, release_id: int | None = None) -> list[DealResult]:

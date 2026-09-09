@@ -46,11 +46,12 @@ def main() -> int:
         from vinyl_deals.pricing import DealClass, evaluate_deals
         rank = {DealClass.NORMAL: 0, DealClass.INTERESTING: 1, DealClass.GOOD: 2, DealClass.HOT: 3, DealClass.VERY_HOT: 4, DealClass.INSUFFICIENT: -1}
         minimum = rank[DealClass(args.min_class)]
-        results = [item for item in evaluate_deals(SQLiteRepository(args.database), args.release_id) if rank[item.deal_class] >= minimum]
+        repository = SQLiteRepository(args.database)
+        results = [item for item in evaluate_deals(repository, args.release_id) if rank[item.deal_class] >= minimum]
         results.sort(key=lambda item: (rank[item.deal_class], item.discount_pct or Decimal("-1")), reverse=True)
         for item in results[:args.limit]:
-            _, offer = SQLiteRepository(args.database).offer_by_id(item.offer_id)
-            print(f"{item.deal_class} {item.discount_pct or Decimal('0'):.0f}%\n{offer.artist_raw or '-'} — {offer.title_raw or '-'}\nStore: {offer.source}\nPrice: {item.current_price} RUB | Market median: {item.market_median or '-'} | Comparisons: {item.comparable_count}\n90d median: {item.median_90d or '-'} | Historical low: {'YES' if item.is_historical_low else 'NO'}\n{offer.url}\n")
+            _, offer = repository.offer_by_id(item.offer_id)
+            print(f"{item.deal_class} {item.discount_pct or Decimal('0'):.0f}%\n\n{offer.artist_raw or '-'} — {offer.title_raw or '-'}\nRelease: {offer.label or '-'} / {offer.catalog_number_raw or '-'} / {offer.release_year or '-'}\nStore: {offer.source}\nPrice: {item.current_price} RUB\nMarket median: {item.market_median or '-'}\nComparisons: {item.comparable_count}\nHistorical min: {item.historical_min or '-'}\n90d median: {item.median_90d or '-'}\n90d minimum: {item.minimum_90d or '-'}\nPrevious price: {item.previous_price or '-'}\nPrice drop: {item.price_drop_pct or Decimal('0'):.0f}%\nHistorical low: {'YES' if item.is_historical_low else 'NO'}\nReasons: {', '.join(item.reasons)}\n{offer.url}\n")
         return 0
     adapter = {"vinyl_ru": VinylRuAdapter, "imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source]() if args.source == "vinyl_ru" else {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source](page_limit=args.page_limit)
     repository = SQLiteRepository(args.database)
