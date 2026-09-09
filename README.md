@@ -20,42 +20,46 @@ vinyl-deals decide-match 12 47 different_release --note "different pressing"
 
 Реализованы Vinyl.ru, Imagine Club и Collectomania. `--enrich` читает только
 публичные карточки и отключён по умолчанию. При 403/429 источник помечается
-как degraded; обхода защиты нет.
+как временно недоступный; обхода защиты нет.
 
-Matching проверяет GTIN checksum, отделяет blocking/soft/unknown признаки,
-кластеризует только сильные совпадения и сохраняет ручные решения. Manual
-`DIFFERENT_RELEASE` является жёстким ограничением: он может безопасно разбить
-ошибочный кластер и запрещает merge релизов через такую связь. SQLite включает
-foreign keys, канонизирует пары offer id и умеет обновлять legacy-базы.
+Сопоставление проверяет контрольную сумму GTIN, отделяет блокирующие,
+второстепенные и неизвестные признаки, кластеризует только сильные совпадения
+и сохраняет ручные решения. Решение `DIFFERENT_RELEASE` является жёстким
+ограничением: оно может безопасно разбить ошибочный кластер и запрещает
+объединять релизы через такую связь. SQLite включает внешние ключи,
+канонизирует пары идентификаторов offer и умеет обновлять старые базы.
 
 `--enrich` обрабатывает карточки последовательно с задержкой; ошибка одной
-карточки сохраняется как warning, а listing-level offer всё равно попадает в
-базу. В CLI выводятся количества найденных, обогащённых и ошибочных карточек.
+карточки сохраняется как предупреждение, а предложение из листинга всё равно
+попадает в базу. В CLI выводятся количества найденных, обогащённых и ошибочных
+карточек.
 
 Telegram, Web UI и новые магазины пока намеренно не реализованы.
 
-Phase 3 adds conservative deal detection for matched releases: market median
-uses only fresh (7 days by default), in-stock, same-condition offers and one
-price per store. `vinyl-deals deals` explains the market sample, historical
-minimum, 30/90-day median, price drop and the deal class. Shipping and
-store-sale `old_price` are not used as market-deal evidence.
+Phase 3 добавляет консервативную оценку выгодности для сопоставленных
+релизов: рыночная медиана использует только свежие (по умолчанию не старше
+семи дней), доступные предложения одного состояния и одну цену на магазин.
+`vinyl-deals deals` объясняет рыночную выборку, исторический минимум, медианы
+за 30/90 дней, снижение цены и класс предложения. Доставка и магазинное
+`old_price` не используются как доказательство выгодности.
 
-By default `deals` hides offers without a dependable market sample. Use
-`vinyl-deals deals --include-insufficient` to inspect only those with a new
-historical low or a price drop of at least 10%; they remain labelled
-`INSUFFICIENT`, not as market deals.
+По умолчанию `deals` скрывает предложения без надёжной рыночной выборки.
+`vinyl-deals deals --include-insufficient` показывает только позиции с новым
+историческим минимумом либо снижением цены не менее чем на 10%; они остаются
+помеченными как `INSUFFICIENT`, а не как рыночные выгодные предложения.
 
-`vinyl-deals search` searches matched Releases by artist, title, barcode,
-catalogue number, label, year and format. It shows fresh offers from the
-supported stores, the absolute lowest price plus separate trusted best new and
-best used prices, and a Discogs *search* link; it does not claim a specific
-Discogs release match.
+`vinyl-deals search` ищет сопоставленные релизы по исполнителю, названию,
+штрихкоду, каталожному номеру, лейблу, году и формату. Команда показывает
+свежие предложения поддерживаемых магазинов, абсолютную минимальную цену,
+отдельные надёжные минимумы для новых и б/у пластинок, а также ссылку на
+*поиск* Discogs; конкретный релиз Discogs не утверждается.
 
 ## Desktop GUI
 
-`vinyl-deals-gui` opens a native Windows PySide6 window. Search fields use the
-same Release Search service as the CLI; selecting a release shows fresh store
-offers, with separate visual marks for Lowest price, Best new and Best used.
-Use «Обновить данные» to refresh all supported catalogues in the background.
-An unavailable store is reported without closing the application or discarding
-the other stores' results.
+`vinyl-deals-gui` открывает нативное окно PySide6 для Windows. Поля поиска
+используют тот же сервис поиска релизов, что и CLI; после выбора релиза окно
+показывает свежие предложения магазинов с отдельными визуальными отметками
+минимальной цены, лучшей новой и лучшей б/у пластинки. Кнопка «Обновить
+данные» обновляет все поддерживаемые каталоги в фоне. Недоступность одного
+магазина отображается без закрытия приложения и без потери результатов других
+магазинов.

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QThread, Signal
 
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.updates import refresh_catalogs
 
 
-class UpdateWorker(QObject):
+class UpdateWorker(QThread):
     progress = Signal(str)
     completed = Signal(object)
     failed = Signal(str)
@@ -18,7 +18,6 @@ class UpdateWorker(QObject):
         self.repository = repository
         self.update_service = update_service
 
-    @Slot()
     def run(self) -> None:
         try:
             self.completed.emit(self.update_service(self.repository, progress=self.progress.emit))

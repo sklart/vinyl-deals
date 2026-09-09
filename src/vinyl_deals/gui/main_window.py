@@ -4,7 +4,7 @@ from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QThread, QUrl
+from PySide6.QtCore import QSettings, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -40,7 +40,6 @@ class MainWindow(QMainWindow):
         self.url_opener = url_opener
         self.results: list[ReleaseSearchResult] = []
         self.selected_result: ReleaseSearchResult | None = None
-        self._thread: QThread | None = None
         self._worker: UpdateWorker | None = None
         self.setWindowTitle("Vinyl Deals Russia")
         self._build_ui()
@@ -213,23 +212,17 @@ class MainWindow(QMainWindow):
             self.url_opener(QUrl(self.selected_result.discogs_url))
 
     def start_refresh(self) -> None:
-        if self._thread and self._thread.isRunning():
+        if self._worker and self._worker.isRunning():
             return
         self.refresh_button.setEnabled(False)
         self.status_label.setText("Обновление данных...")
-        self._thread = QThread(self)
         worker = UpdateWorker(self.repository, self.update_service)
         self._worker = worker
-        worker.moveToThread(self._thread)
-        self._thread.started.connect(worker.run)
         worker.progress.connect(self.status_label.setText)
         worker.completed.connect(self._refresh_completed)
         worker.failed.connect(self._refresh_failed)
-        worker.completed.connect(self._thread.quit)
-        worker.failed.connect(self._thread.quit)
-        self._thread.finished.connect(worker.deleteLater)
-        self._thread.finished.connect(self._refresh_finished)
-        self._thread.start()
+        worker.finished.connect(self._refresh_finished)
+        worker.start()
 
     def _refresh_completed(self, reports: object) -> None:
         self.status_label.setText("Обновление завершено")
@@ -241,5 +234,6 @@ class MainWindow(QMainWindow):
 
     def _refresh_finished(self) -> None:
         self.refresh_button.setEnabled(True)
+        if self._worker:
+            self._worker.deleteLater()
         self._worker = None
-        self._thread = None
