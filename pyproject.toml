@@ -7,10 +7,11 @@ name = "vinyl-deals"
 version = "0.1.0"
 description = "Conservative monitoring of vinyl-record offers in Russia"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["PySide6>=6.8"]
 
 [project.scripts]
 vinyl-deals = "vinyl_deals.cli:main"
+vinyl-deals-gui = "vinyl_deals.gui.app:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

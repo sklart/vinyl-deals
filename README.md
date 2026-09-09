@@ -14,6 +14,7 @@ vinyl-deals scrape collectomania --page-limit 1 --enrich
 vinyl-deals match --build
 vinyl-deals deals --min-class GOOD --limit 50
 vinyl-deals search --artist "Opeth" --title "Blackwater Park"
+vinyl-deals-gui
 vinyl-deals decide-match 12 47 different_release --note "different pressing"
 ```
 
@@ -49,3 +50,12 @@ catalogue number, label, year and format. It shows fresh offers from the
 supported stores, the absolute lowest price plus separate trusted best new and
 best used prices, and a Discogs *search* link; it does not claim a specific
 Discogs release match.
+
+## Desktop GUI
+
+`vinyl-deals-gui` opens a native Windows PySide6 window. Search fields use the
+same Release Search service as the CLI; selecting a release shows fresh store
+offers, with separate visual marks for Lowest price, Best new and Best used.
+Use «Обновить данные» to refresh all supported catalogues in the background.
+An unavailable store is reported without closing the application or discarding
+the other stores' results.
