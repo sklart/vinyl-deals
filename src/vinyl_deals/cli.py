@@ -4,6 +4,7 @@ from time import sleep
 from pathlib import Path
 from vinyl_deals.adapters import CollectomaniaAdapter, ImagineClubAdapter, VinylRuAdapter
 from vinyl_deals.database import SQLiteRepository
+from vinyl_deals.database.repository import ManualDecisionConflict, ReleaseMergeConflict
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="vinyl-deals"); commands = parser.add_subparsers(dest="command", required=True)
@@ -32,8 +33,12 @@ def main() -> int:
         print("No pending possible matches." if not rows else "\n".join(f"{offer_id} <-> {candidate_id}: {confidence:.0%} ({reasons})" for offer_id, candidate_id, confidence, reasons in rows))
         return 0
     if args.command == "decide-match":
-        SQLiteRepository(args.database).decide_match(args.offer_id, args.candidate_offer_id, args.decision, args.note)
-        print(f"Saved {args.decision} for {args.offer_id} ↔ {args.candidate_offer_id}.")
+        try:
+            SQLiteRepository(args.database).decide_match(args.offer_id, args.candidate_offer_id, args.decision, args.note)
+        except (ManualDecisionConflict, ReleaseMergeConflict) as error:
+            print(f"Cannot save manual decision: {error}")
+            return 2
+        print(f"Saved {args.decision} for {args.offer_id} <-> {args.candidate_offer_id}.")
         return 0
     adapter = {"vinyl_ru": VinylRuAdapter, "imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source]() if args.source == "vinyl_ru" else {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source](page_limit=args.page_limit)
     repository = SQLiteRepository(args.database)

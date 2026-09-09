@@ -1,5 +1,6 @@
 from __future__ import annotations
 from vinyl_deals.database.repository import SQLiteRepository
+from vinyl_deals.database.repository import ReleaseMergeConflict
 from .candidates import CandidateIndex
 from .matcher import MatchKind, match_offers
 
@@ -16,5 +17,10 @@ def build_match_queue(repository: SQLiteRepository) -> int:
             if result.kind != MatchKind.DIFFERENT:
                 repository.record_match(pair[0], pair[1], result.kind, result.confidence, result.reasons); recorded += 1
                 if result.kind in {MatchKind.EXACT_BARCODE, MatchKind.CATALOG_AND_LABEL, MatchKind.WEIGHTED} and result.confidence >= .90:
-                    repository.create_release_for_pair(pair[0], pair[1], offer, candidate)
+                    try:
+                        repository.create_release_for_pair(pair[0], pair[1], offer, candidate)
+                    except ReleaseMergeConflict:
+                        # The pair remains recorded for diagnostics, but manual
+                        # DIFFERENT constraints always outrank automatic evidence.
+                        continue
     return recorded
