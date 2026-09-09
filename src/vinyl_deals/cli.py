@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+from time import sleep
 from pathlib import Path
 from vinyl_deals.adapters import CollectomaniaAdapter, ImagineClubAdapter, VinylRuAdapter
 from vinyl_deals.database import SQLiteRepository
@@ -19,6 +20,8 @@ def main() -> int:
             print("Latest scrape runs:")
             for store, status, finished_at in runs:
                 print(f"- {store}: {status} ({finished_at or 'running'})")
+        diagnostics = repository.integrity_diagnostics()
+        print("Integrity: OK." if not diagnostics else "Integrity warnings:\n" + "\n".join(f"- {item}" for item in diagnostics))
         return 0
     if args.command == "match":
         repository = SQLiteRepository(args.database)
@@ -40,10 +43,23 @@ def main() -> int:
         if result.state != "active":
             repository.finish_scrape_run(run_id, result.state, result.pages_processed, len(result.offers), result.warnings, result.errors)
             print("DEGRADED: " + "; ".join(result.warnings)); return 2
-        for offer in result.offers:
-            repository.upsert_offer(adapter.enrich_offer(offer) if args.enrich else offer)
-        repository.finish_scrape_run(run_id, "active", result.pages_processed, len(result.offers), result.warnings, result.errors)
-        print(f"OK: {args.source} — {len(result.offers)} offers persisted in {args.database}"); return 0
+        warnings = list(result.warnings)
+        enriched = enrichment_errors = 0
+        for index, offer in enumerate(result.offers):
+            persisted = offer
+            if args.enrich:
+                try:
+                    persisted = adapter.enrich_offer(offer)
+                    enriched += 1
+                except Exception as error:
+                    enrichment_errors += 1
+                    warnings.append(f"detail enrichment failed for {offer.source_product_id}: {error}")
+                if index + 1 < len(result.offers):
+                    sleep(getattr(adapter, "delay_seconds", 0))
+            repository.upsert_offer(persisted)
+        repository.finish_scrape_run(run_id, "active", result.pages_processed, len(result.offers), tuple(warnings), result.errors)
+        report = f"OK: {args.source} — offers: {len(result.offers)}, enriched: {enriched}, enrichment errors: {enrichment_errors}"
+        print(f"{report} persisted in {args.database}"); return 0
     except Exception as error:
         repository.finish_scrape_run(run_id, "error", 0, 0, errors=(str(error),))
         raise

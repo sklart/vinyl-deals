@@ -29,6 +29,6 @@ def normalize_barcode(value: str | None) -> str | None:
 
 def tags(value: tuple[str, ...], edition_raw: str | None = None) -> frozenset[str]:
     source = " ".join((*value, edition_raw or ""))
-    vocabulary = {"remaster": ("remaster",), "mono": ("mono",), "stereo": ("stereo",), "deluxe": ("deluxe",), "limited": ("limited",), "anniversary": ("anniversary",), "colored": ("colored", "colour", "color vinyl", "coloured vinyl"), "black": ("black vinyl", "standard"), "picture_disc": ("picture disc",), "180g": ("180g",), "45rpm": ("45 rpm", "45rpm"), "rsd": ("rsd", "record store day"), "box_set": ("box set", "box"), "audiophile": ("audiophile",)}
+    vocabulary = {"remaster": ("remaster",), "mono": ("mono",), "stereo": ("stereo",), "deluxe": ("deluxe",), "limited": ("limited",), "anniversary": ("anniversary",), "colored": ("colored", "colour", "color vinyl", "coloured vinyl"), "black": ("black vinyl", "standard"), "picture_disc": ("picture disc",), "180g": ("180g",), "45rpm": ("45 rpm", "45rpm"), "rsd": ("rsd", "record store day"), "box_set": ("box set", "box"), "single": ("single lp",), "audiophile": ("audiophile",)}
     normalized = text(source).replace("180 g", "180g")
     return frozenset(name for name, aliases in vocabulary.items() if any(alias in normalized for alias in aliases))

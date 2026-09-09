@@ -1,8 +1,10 @@
 """Small explicit SQLite migration registry for the MVP."""
 from __future__ import annotations
+import json
 import sqlite3
+from datetime import datetime, timezone
 
-CURRENT_VERSION = 1
+CURRENT_VERSION = 2
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS raw_products (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_product_id TEXT NOT NULL, fetched_at TEXT NOT NULL, payload_json TEXT NOT NULL, UNIQUE(source, source_product_id));
@@ -24,13 +26,89 @@ CREATE TABLE IF NOT EXISTS manual_match_decisions (id INTEGER PRIMARY KEY, offer
 CREATE TABLE IF NOT EXISTS scrape_runs (id INTEGER PRIMARY KEY, store TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL, pages_processed INTEGER NOT NULL DEFAULT 0, offers_found INTEGER NOT NULL DEFAULT 0, errors TEXT NOT NULL DEFAULT '', warnings TEXT NOT NULL DEFAULT '');
 """
 
-MIGRATIONS = {1: SCHEMA_V1}
+def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+
+
+def _canonicalize_pairs(connection: sqlite3.Connection, table: str) -> None:
+    rows = connection.execute(
+        f"SELECT id, offer_id, candidate_offer_id FROM {table} WHERE offer_id > candidate_offer_id"
+    ).fetchall()
+    for row_id, left, right in rows:
+        forward = connection.execute(
+            f"SELECT id FROM {table} WHERE offer_id=? AND candidate_offer_id=?", (right, left)
+        ).fetchone()
+        if forward:
+            connection.execute(f"DELETE FROM {table} WHERE id=?", (row_id,))
+        else:
+            connection.execute(
+                f"UPDATE {table} SET offer_id=?, candidate_offer_id=? WHERE id=?", (right, left, row_id)
+            )
+
+
+def _backfill_offer_json(connection: sqlite3.Connection) -> None:
+    raw_by_key = {
+        (source, product_id): (fetched_at, payload)
+        for source, product_id, fetched_at, payload in connection.execute(
+            "SELECT source, source_product_id, fetched_at, payload_json FROM raw_products"
+        )
+    }
+    price_times = dict(connection.execute("SELECT offer_id, MIN(observed_at) FROM price_history GROUP BY offer_id"))
+    cursor = connection.execute("SELECT * FROM offers")
+    columns = [column[0] for column in cursor.description]
+    for row in cursor.fetchall():
+        value = dict(zip(columns, row, strict=True))
+        raw_fetched_at, raw_data = raw_by_key.get((value["source"], value["source_product_id"]), (None, {}))
+        timestamp = value.get("last_seen") or raw_fetched_at or price_times.get(value["id"]) or datetime.now(timezone.utc).isoformat()
+        if not value.get("first_seen"):
+            connection.execute("UPDATE offers SET first_seen=? WHERE id=?", (timestamp, value["id"]))
+        if not value.get("last_seen"):
+            connection.execute("UPDATE offers SET last_seen=? WHERE id=?", (timestamp, value["id"]))
+        if value.get("offer_json") not in (None, "", "{}"):
+            continue
+        try:
+            raw_data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+        except json.JSONDecodeError:
+            raw_data = {}
+        payload = {
+            "source": value["source"], "source_product_id": value["source_product_id"], "url": value["url"],
+            "fetched_at": timestamp, "artist_raw": value.get("artist_raw"), "title_raw": value.get("title_raw"),
+            "edition_raw": None, "price": value.get("price"), "old_price": None, "currency": "RUB",
+            "availability": value.get("availability") or "unknown", "stock_quantity": None, "stock_text": None,
+            "city": None, "local_store": False, "pickup_available": False, "delivery_available": True,
+            "condition_media": value.get("condition_media"), "condition_sleeve": None, "format": value.get("format"),
+            "vinyl_size": value.get("vinyl_size"), "rpm": value.get("rpm"), "disc_count": value.get("disc_count"),
+            "label": value.get("label"), "store_sku": value.get("store_sku"),
+            "catalog_number_raw": value.get("catalog_number_raw"), "barcode": value.get("barcode"),
+            "release_year": value.get("release_year"), "country": value.get("country"), "vinyl_color": value.get("vinyl_color"),
+            "edition_tags": json.loads(value.get("edition_tags") or "[]"), "description": None,
+            "image_url": None, "raw_data": raw_data,
+        }
+        connection.execute("UPDATE offers SET offer_json=? WHERE id=?", (json.dumps(payload, ensure_ascii=False), value["id"]))
+
+
+def migrate_v2(connection: sqlite3.Connection) -> None:
+    additions = {
+        "store_sku": "TEXT", "first_seen": "TEXT", "offer_json": "TEXT NOT NULL DEFAULT '{}'",
+        "condition_sleeve": "TEXT", "vinyl_size": "TEXT",
+    }
+    columns = _columns(connection, "offers")
+    for name, definition in additions.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE offers ADD COLUMN {name} {definition}")
+    _canonicalize_pairs(connection, "release_matches")
+    _canonicalize_pairs(connection, "manual_match_decisions")
+    _backfill_offer_json(connection)
 
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version > CURRENT_VERSION:
         raise RuntimeError(f"Unsupported database schema version: {version}")
-    for target_version in range(version + 1, CURRENT_VERSION + 1):
-        connection.executescript(MIGRATIONS[target_version])
-        connection.execute(f"PRAGMA user_version = {target_version}")
+    if version < 1:
+        connection.executescript(SCHEMA_V1)
+        connection.execute("PRAGMA user_version = 1")
+        version = 1
+    if version < 2:
+        migrate_v2(connection)
+        connection.execute("PRAGMA user_version = 2")

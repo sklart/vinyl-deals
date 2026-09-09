@@ -71,10 +71,12 @@ def match_offers(left: RawOffer, right: RawOffer) -> MatchResult:
         return MatchResult(MatchKind.EXACT_BARCODE, 0.99, tuple(matches), (), tuple(soft), tuple(unknown))
     left_catalog, right_catalog = normalize.catalog_number(left.catalog_number_raw), normalize.catalog_number(right.catalog_number_raw)
     same_label = normalize.text(left.label) and normalize.text(left.label) == normalize.text(right.label)
-    if left_catalog and left_catalog == right_catalog and same_label and same_artist_title:
+    if left_catalog and left_catalog == right_catalog and same_label and same_artist_title and "release_year differs" not in soft:
         return MatchResult(MatchKind.CATALOG_AND_LABEL, 0.95, tuple(matches), (), tuple(soft), tuple(unknown))
-    if not same_artist_title:
+    if artist == Comparison.CONFLICT or title == Comparison.CONFLICT:
         return MatchResult(MatchKind.DIFFERENT, 0.0, tuple(matches), ("artist/title are not both confirmed",), tuple(soft), tuple(unknown))
+    if not same_artist_title:
+        return MatchResult(MatchKind.POSSIBLE, .30, tuple(matches), (), tuple(soft), tuple(unknown))
     weights = {"format matches": .08, "disc_count matches": .08, "vinyl_size matches": .04, "rpm matches": .05, "vinyl_color matches": .04, "edition tags match": .04, "country matches": .04, "release_year matches": .05}
     score = .60 + sum(weights.get(item, 0) for item in matches) - .12 * len(soft)
     if score >= .90 and not soft:
