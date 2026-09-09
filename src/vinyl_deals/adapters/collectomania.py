@@ -34,7 +34,7 @@ class CollectomaniaAdapter(BaseStoreAdapter):
                 if url and self.delay_seconds:
                     sleep(self.delay_seconds)
             warnings = (f"Catalogue intentionally limited to {self.page_limit} pages.",) if url else ()
-            return ScrapeResult(tuple(offers), warnings=warnings)
+            return ScrapeResult(tuple(offers), warnings=warnings, pages_processed=pages)
         except HTTPError as error:
             if error.code in {403, 429}:
                 return ScrapeResult((), StoreState.DEGRADED, (f"Collectomania returned HTTP {error.code}; source paused.",))
@@ -42,6 +42,9 @@ class CollectomaniaAdapter(BaseStoreAdapter):
 
     def get_product(self, source_product_id: str) -> RawOffer | None:
         return None  # The source id has no independently addressable public URL.
+
+    def enrich_offer(self, offer: RawOffer) -> RawOffer:
+        return self.parse_product_page(self._fetch(offer.url), offer)
 
     def parse_listing(self, html: str, *, fetched_at: datetime | None = None) -> list[RawOffer]:
         timestamp = fetched_at or datetime.now(timezone.utc)

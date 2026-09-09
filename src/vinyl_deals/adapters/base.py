@@ -25,3 +25,7 @@ class BaseStoreAdapter(ABC):
 
     def get_stock(self, source_product_id: str) -> RawOffer | None:
         return self.get_product(source_product_id)
+
+    def enrich_offer(self, offer: RawOffer) -> RawOffer:
+        """Optionally fetch one public product card; default keeps listing data."""
+        return offer

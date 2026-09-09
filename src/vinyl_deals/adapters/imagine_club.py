@@ -39,7 +39,7 @@ class ImagineClubAdapter(BaseStoreAdapter):
                 if page < last_page and self.delay_seconds:
                     sleep(self.delay_seconds)
             warning = () if self.page_limit is None or self.page_limit > last_page else (f"Catalogue intentionally limited to {self.page_limit} pages.",)
-            return ScrapeResult(tuple(offers), warnings=warning)
+            return ScrapeResult(tuple(offers), warnings=warning, pages_processed=len(pages))
         except HTTPError as error:
             if error.code in {403, 429}:
                 return ScrapeResult((), StoreState.DEGRADED, (f"Imagine Club returned HTTP {error.code}; source paused.",))
@@ -49,6 +49,9 @@ class ImagineClubAdapter(BaseStoreAdapter):
         # Product ids are stable only in listing HTML. Callers should retain
         # the listing URL and use parse_product_page for detail enrichment.
         return None
+
+    def enrich_offer(self, offer: RawOffer) -> RawOffer:
+        return self.parse_product_page(self._fetch(offer.url), offer)
 
     def parse_listing(self, html: str, *, fetched_at: datetime | None = None) -> list[RawOffer]:
         timestamp = fetched_at or datetime.now(timezone.utc)
@@ -87,7 +90,8 @@ class ImagineClubAdapter(BaseStoreAdapter):
             "artist_raw": fields.get("исполнитель") or listing_offer.artist_raw,
             "title_raw": fields.get("название") or listing_offer.title_raw,
             "label": fields.get("лейбл") or None,
-            "catalog_number_raw": sku or None,
+            "store_sku": sku or None,
+            "catalog_number_raw": listing_offer.catalog_number_raw,
             "release_year": self._year(fields.get("год", "")),
             "country": fields.get("страна") or listing_offer.country,
             "format": fields.get("тип носителя", "").upper() or listing_offer.format,

@@ -48,6 +48,7 @@ class RawOffer:
     rpm: int | None = None
     disc_count: int | None = None
     label: str | None = None
+    store_sku: str | None = None
     catalog_number_raw: str | None = None
     barcode: str | None = None
     release_year: int | None = None
@@ -68,3 +69,5 @@ class ScrapeResult:
     offers: tuple[RawOffer, ...]
     state: StoreState = StoreState.ACTIVE
     warnings: tuple[str, ...] = ()
+    pages_processed: int = 0
+    errors: tuple[str, ...] = ()
