@@ -27,6 +27,7 @@ def test_manual_same_merges_previously_separate_releases(tmp_path):
     repo.record_match(2, 3, "possible", .6, ())
     with pytest.raises(ReleaseMergeConflict):
         repo.decide_match(2, 3, "same_release")
+    assert repo.manual_decision(2, 3) is None
     with sqlite3.connect(database) as c:
         assert c.execute("SELECT COUNT(*) FROM releases").fetchone()[0] == 2
         assert c.execute("SELECT COUNT(DISTINCT release_id) FROM offers").fetchone()[0] == 2
