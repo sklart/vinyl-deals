@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import StrEnum
+import re
 from statistics import median
 
 from vinyl_deals.database.repository import SQLiteRepository
@@ -46,13 +47,13 @@ def median_price(prices: list[Decimal]) -> Decimal | None:
 
 
 def condition_bucket(offer: RawOffer) -> str:
-    value = (offer.condition_media or "").casefold()
-    if any(token in value for token in ("new", "sealed")): return "new"
-    if value in {"m", "nm", "m/nm"}: return "nm"
-    if value.startswith("ex"): return "ex"
-    if value.startswith("vg+"): return "vg+"
-    if value.startswith("vg"): return "vg"
-    if any(token in value for token in ("good", "g+", "g")): return "good"
+    value = (offer.condition_media or "").casefold().strip()
+    if re.search(r"\b(new|sealed)\b", value): return "new"
+    if value in {"m", "nm", "m/nm"} or "mint" in value: return "nm"
+    if value.startswith("ex") or "excellent" in value: return "ex"
+    if value.startswith("vg+") or "very good plus" in value: return "vg+"
+    if value.startswith("vg") or "very good" in value: return "vg"
+    if re.search(r"\bgood\b", value) or value in {"g", "g+"}: return "good"
     return "unknown"
 
 
@@ -73,12 +74,15 @@ def evaluate_offer(repository: SQLiteRepository, offer_id: int, *, now: datetime
         return None
     release_id, offer = target
     point = now or datetime.now(timezone.utc)
+    if offer.fetched_at < point - timedelta(days=freshness_days):
+        return None
     comparables = repository.comparable_release_offers(release_id, exclude_offer_id=offer_id)
     # One store contributes at most one current price; lowest is the useful offer.
     by_store: dict[str, Decimal] = {}
     for _, other in comparables:
         if (
             condition_bucket(other) == condition_bucket(offer)
+            and other.source != offer.source
             and other.price is not None
             and other.price > 0
             and other.fetched_at >= point - timedelta(days=freshness_days)
@@ -98,12 +102,16 @@ def evaluate_offer(repository: SQLiteRepository, offer_id: int, *, now: datetime
     previous = observed[-2][1] if len(observed) > 1 else None
     historical_low = bool(historical is not None and offer.price < historical)
     price_drop = ((previous - offer.price) / previous * 100) if previous is not None and previous > offer.price else None
+    deal_class = classify(discount, len(prices))
     reasons = [f"{len(prices)} comparable stores"]
     if market is None: reasons.append("market sample unavailable")
     if len(prices) == 2: reasons.append("small market sample")
+    if len(prices) < 2: reasons.append("insufficient market sample")
     if historical_low: reasons.append("new historical low")
     if price_drop is not None: reasons.append("price dropped")
-    return DealResult(offer_id, release_id, offer.price, market, len(prices), discount, classify(discount, len(prices)), historical, window(30), window(90), window_minimum(90), previous, price_drop, historical_low, tuple(reasons))
+    if deal_class == DealClass.INSUFFICIENT and (historical_low or (price_drop is not None and price_drop >= 10)):
+        reasons.append("historical signal only")
+    return DealResult(offer_id, release_id, offer.price, market, len(prices), discount, deal_class, historical, window(30), window(90), window_minimum(90), previous, price_drop, historical_low, tuple(reasons))
 
 
 def evaluate_deals(repository: SQLiteRepository, release_id: int | None = None) -> list[DealResult]:

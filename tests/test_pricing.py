@@ -4,7 +4,7 @@ from decimal import Decimal
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.domain import Availability, RawOffer
 from vinyl_deals.matching.service import build_match_queue
-from vinyl_deals.pricing import DealClass, classify, evaluate_offer, median_price
+from vinyl_deals.pricing import DealClass, classify, condition_bucket, evaluate_offer, median_price
 
 
 def add(repo, source, product, price, *, condition="NEW", when=None, availability=Availability.IN_STOCK, old_price=None):
@@ -108,3 +108,44 @@ def test_classification_boundaries_and_sample_sizes():
     assert classify(Decimal("35"), 3) == DealClass.VERY_HOT
     assert classify(Decimal("40"), 2) == DealClass.GOOD
     assert classify(Decimal("40"), 1) == DealClass.INSUFFICIENT
+
+
+def test_stale_target_is_excluded_but_fresh_target_is_evaluated(tmp_path):
+    repo = SQLiteRepository(tmp_path / "target-freshness.sqlite3")
+    now = datetime(2026, 9, 9, tzinfo=timezone.utc)
+    add(repo, "a", "1", 50, when=now - timedelta(days=8))
+    add(repo, "b", "2", 100, when=now)
+    build_match_queue(repo)
+    assert evaluate_offer(repo, 1, now=now) is None
+
+    add(repo, "a", "1", 50, when=now)
+    assert evaluate_offer(repo, 1, now=now) is not None
+
+
+def test_target_store_is_excluded_from_its_own_benchmark(tmp_path):
+    repo = SQLiteRepository(tmp_path / "target-store.sqlite3")
+    now = datetime(2026, 9, 9, tzinfo=timezone.utc)
+    add(repo, "store-a", "target", 3000, when=now)
+    add(repo, "store-a", "duplicate", 4500, when=now)
+    add(repo, "store-b", "one", 5000, when=now)
+    add(repo, "store-b", "duplicate", 8000, when=now)
+    add(repo, "store-c", "one", 5200, when=now)
+    build_match_queue(repo)
+
+    result = evaluate_offer(repo, 1, now=now)
+    assert result.comparable_count == 2
+    assert result.market_median == Decimal("5100")
+
+
+def test_condition_bucket_accepts_common_long_forms():
+    def offer(condition: str) -> RawOffer:
+        return RawOffer(source="test", source_product_id=condition, url="https://x", fetched_at=datetime.now(timezone.utc), condition_media=condition)
+
+    assert condition_bucket(offer("Mint (M)")) == "nm"
+    assert condition_bucket(offer("Near Mint (NM)")) == "nm"
+    assert condition_bucket(offer("Excellent (EX)")) == "ex"
+    assert condition_bucket(offer("Very Good Plus (VG+)")) == "vg+"
+    assert condition_bucket(offer("Very Good (VG)")) == "vg"
+    assert condition_bucket(offer("Good (G)")) == "good"
+    assert condition_bucket(offer("NEW")) == "new"
+    assert condition_bucket(offer("SEALED")) == "new"

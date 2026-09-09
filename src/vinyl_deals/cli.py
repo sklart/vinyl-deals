@@ -12,7 +12,7 @@ def main() -> int:
     scrape = commands.add_parser("scrape", help="Fetch a public store catalogue"); scrape.add_argument("source", choices=["vinyl_ru", "imagine_club", "collectomania"]); scrape.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); scrape.add_argument("--page-limit", type=int, help="Temporary safe bound for a paginated source"); scrape.add_argument("--enrich", action="store_true", help="Fetch public product details for listed offers")
     match = commands.add_parser("match", help="Show pending possible release matches"); match.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); match.add_argument("--build", action="store_true", help="Build candidate pairs from persisted offers")
     decide = commands.add_parser("decide-match", help="Save a manual release-match decision"); decide.add_argument("offer_id", type=int); decide.add_argument("candidate_offer_id", type=int); decide.add_argument("decision", choices=["same_release", "different_release", "ignore"]); decide.add_argument("--note"); decide.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3"))
-    deals = commands.add_parser("deals", help="Evaluate matched release offers"); deals.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); deals.add_argument("--min-class", default="NORMAL", choices=["NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); deals.add_argument("--limit", type=int, default=50); deals.add_argument("--release-id", type=int)
+    deals = commands.add_parser("deals", help="Evaluate matched release offers"); deals.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); deals.add_argument("--min-class", default="NORMAL", choices=["NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); deals.add_argument("--include-insufficient", action="store_true", help="Include historical-only signals with insufficient market data"); deals.add_argument("--limit", type=int, default=50); deals.add_argument("--release-id", type=int)
     commands.add_parser("doctor", help="Check local configuration"); args = parser.parse_args()
     if args.command == "doctor":
         repository = SQLiteRepository()
@@ -47,11 +47,17 @@ def main() -> int:
         rank = {DealClass.NORMAL: 0, DealClass.INTERESTING: 1, DealClass.GOOD: 2, DealClass.HOT: 3, DealClass.VERY_HOT: 4, DealClass.INSUFFICIENT: -1}
         minimum = rank[DealClass(args.min_class)]
         repository = SQLiteRepository(args.database)
-        results = [item for item in evaluate_deals(repository, args.release_id) if rank[item.deal_class] >= minimum]
+        def visible(item):
+            if rank[item.deal_class] >= minimum:
+                return True
+            return args.include_insufficient and item.deal_class == DealClass.INSUFFICIENT and (item.is_historical_low or (item.price_drop_pct is not None and item.price_drop_pct >= 10))
+        results = [item for item in evaluate_deals(repository, args.release_id) if visible(item)]
         results.sort(key=lambda item: (rank[item.deal_class], item.discount_pct or Decimal("-1")), reverse=True)
         for item in results[:args.limit]:
             _, offer = repository.offer_by_id(item.offer_id)
-            print(f"{item.deal_class} {item.discount_pct or Decimal('0'):.0f}%\n\n{offer.artist_raw or '-'} — {offer.title_raw or '-'}\nRelease: {offer.label or '-'} / {offer.catalog_number_raw or '-'} / {offer.release_year or '-'}\nStore: {offer.source}\nPrice: {item.current_price} RUB\nMarket median: {item.market_median or '-'}\nComparisons: {item.comparable_count}\nHistorical min: {item.historical_min or '-'}\n90d median: {item.median_90d or '-'}\n90d minimum: {item.minimum_90d or '-'}\nPrevious price: {item.previous_price or '-'}\nPrice drop: {item.price_drop_pct or Decimal('0'):.0f}%\nHistorical low: {'YES' if item.is_historical_low else 'NO'}\nReasons: {', '.join(item.reasons)}\n{offer.url}\n")
+            heading = str(item.deal_class) if item.deal_class == DealClass.INSUFFICIENT else f"{item.deal_class} {item.discount_pct or Decimal('0'):.0f}%"
+            market = "" if item.deal_class == DealClass.INSUFFICIENT else f"Market median: {item.market_median or '-'}\n"
+            print(f"{heading}\n\n{offer.artist_raw or '-'} — {offer.title_raw or '-'}\nRelease: {offer.label or '-'} / {offer.catalog_number_raw or '-'} / {offer.release_year or '-'}\nStore: {offer.source}\nPrice: {item.current_price} RUB\n{market}Comparisons: {item.comparable_count}\nHistorical min: {item.historical_min or '-'}\n90d median: {item.median_90d or '-'}\n90d minimum: {item.minimum_90d or '-'}\nPrevious price: {item.previous_price or '-'}\nPrice drop: {item.price_drop_pct or Decimal('0'):.0f}%\nHistorical low: {'YES' if item.is_historical_low else 'NO'}\nReasons: {', '.join(item.reasons)}\n{offer.url}\n")
         return 0
     adapter = {"vinyl_ru": VinylRuAdapter, "imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source]() if args.source == "vinyl_ru" else {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source](page_limit=args.page_limit)
     repository = SQLiteRepository(args.database)

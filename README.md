@@ -37,3 +37,8 @@ uses only fresh (7 days by default), in-stock, same-condition offers and one
 price per store. `vinyl-deals deals` explains the market sample, historical
 minimum, 30/90-day median, price drop and the deal class. Shipping and
 store-sale `old_price` are not used as market-deal evidence.
+
+By default `deals` hides offers without a dependable market sample. Use
+`vinyl-deals deals --include-insufficient` to inspect only those with a new
+historical low or a price drop of at least 10%; they remain labelled
+`INSUFFICIENT`, not as market deals.
