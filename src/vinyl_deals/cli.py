@@ -49,7 +49,8 @@ def main() -> int:
         results = [item for item in evaluate_deals(SQLiteRepository(args.database), args.release_id) if rank[item.deal_class] >= minimum]
         results.sort(key=lambda item: (rank[item.deal_class], item.discount_pct or Decimal("-1")), reverse=True)
         for item in results[:args.limit]:
-            print(f"{item.deal_class} {item.discount_pct or Decimal('0'):.0f}% | offer {item.offer_id} | {item.current_price} RUB | market {item.market_median or '-'} | comparisons {item.comparable_count}")
+            _, offer = SQLiteRepository(args.database).offer_by_id(item.offer_id)
+            print(f"{item.deal_class} {item.discount_pct or Decimal('0'):.0f}%\n{offer.artist_raw or '-'} — {offer.title_raw or '-'}\nStore: {offer.source}\nPrice: {item.current_price} RUB | Market median: {item.market_median or '-'} | Comparisons: {item.comparable_count}\n90d median: {item.median_90d or '-'} | Historical low: {'YES' if item.is_historical_low else 'NO'}\n{offer.url}\n")
         return 0
     adapter = {"vinyl_ru": VinylRuAdapter, "imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source]() if args.source == "vinyl_ru" else {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source](page_limit=args.page_limit)
     repository = SQLiteRepository(args.database)
