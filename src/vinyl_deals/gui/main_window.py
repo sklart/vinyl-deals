@@ -41,6 +41,8 @@ class MainWindow(QMainWindow):
         self.results: list[ReleaseSearchResult] = []
         self.selected_result: ReleaseSearchResult | None = None
         self._worker: UpdateWorker | None = None
+        self._search_performed = False
+        self._updating = False
         self.setWindowTitle("Vinyl Deals Russia")
         self._build_ui()
         self._restore_window_state()
@@ -90,6 +92,7 @@ class MainWindow(QMainWindow):
         self.clear_button.clicked.connect(self.clear_search)
         self.refresh_button.clicked.connect(self.start_refresh)
         self.release_table.itemSelectionChanged.connect(self.select_release)
+        self.offer_table.itemSelectionChanged.connect(self._update_open_actions)
         self.offer_table.itemDoubleClicked.connect(lambda _: self.open_selected_offer())
         self.open_store_button.clicked.connect(self.open_selected_offer)
         self.open_discogs_button.clicked.connect(self.open_discogs)
@@ -131,12 +134,12 @@ class MainWindow(QMainWindow):
         criteria = self._criteria()
         if criteria is None:
             return
+        self._search_performed = True
         self.results = self.search_service(self.repository, **criteria)
         self.release_table.setRowCount(0)
         self.offer_table.setRowCount(0)
         self.selected_result = None
-        self.open_store_button.setEnabled(False)
-        self.open_discogs_button.setEnabled(False)
+        self._update_open_actions()
         for result in self.results:
             row = self.release_table.rowCount()
             self.release_table.insertRow(row)
@@ -157,10 +160,10 @@ class MainWindow(QMainWindow):
             field.clear()
         self.results = []
         self.selected_result = None
+        self._search_performed = False
         self.release_table.setRowCount(0)
         self.offer_table.setRowCount(0)
-        self.open_store_button.setEnabled(False)
-        self.open_discogs_button.setEnabled(False)
+        self._update_open_actions()
         self.status_label.setText("Введите реквизиты пластинки и нажмите «Найти».")
 
     def select_release(self) -> None:
@@ -174,8 +177,7 @@ class MainWindow(QMainWindow):
     def populate_offers(self) -> None:
         self.offer_table.setRowCount(0)
         result = self.selected_result
-        self.open_store_button.setEnabled(False)
-        self.open_discogs_button.setEnabled(bool(result and result.discogs_url))
+        self._update_open_actions()
         if not result:
             return
         highlights: dict[int, list[str]] = {}
@@ -202,10 +204,24 @@ class MainWindow(QMainWindow):
         if not result.offers:
             self.status_label.setText("Нет актуальных предложений")
 
+    def _update_open_actions(self) -> None:
+        selected = self.offer_table.selectedItems()
+        url = selected[0].data(Qt.ItemDataRole.UserRole) if selected else None
+        self.open_store_button.setEnabled(not self._updating and bool(url) and QUrl(str(url)).isValid())
+        self.open_discogs_button.setEnabled(not self._updating and bool(self.selected_result and self.selected_result.discogs_url))
+
+    def _set_updating(self, updating: bool) -> None:
+        self._updating = updating
+        for field in self.fields.values():
+            field.setEnabled(not updating)
+        for control in (self.search_button, self.clear_button, self.refresh_button, self.release_table, self.offer_table):
+            control.setEnabled(not updating)
+        self._update_open_actions()
+
     def open_selected_offer(self) -> None:
         selected = self.offer_table.selectedItems()
-        if selected:
-            self.url_opener(QUrl(selected[0].data(Qt.ItemDataRole.UserRole)))
+        if selected and (url := QUrl(str(selected[0].data(Qt.ItemDataRole.UserRole)))).isValid():
+            self.url_opener(url)
 
     def open_discogs(self) -> None:
         if self.selected_result and self.selected_result.discogs_url:
@@ -214,7 +230,7 @@ class MainWindow(QMainWindow):
     def start_refresh(self) -> None:
         if self._worker and self._worker.isRunning():
             return
-        self.refresh_button.setEnabled(False)
+        self._set_updating(True)
         self.status_label.setText("Обновление данных...")
         worker = UpdateWorker(self.repository, self.update_service)
         self._worker = worker
@@ -226,14 +242,14 @@ class MainWindow(QMainWindow):
 
     def _refresh_completed(self, reports: object) -> None:
         self.status_label.setText("Обновление завершено")
-        if self.results:
+        if self._search_performed:
             self.perform_search()
 
     def _refresh_failed(self, message: str) -> None:
         self.status_label.setText(f"Ошибка обновления: {message}")
 
     def _refresh_finished(self) -> None:
-        self.refresh_button.setEnabled(True)
+        self._set_updating(False)
         if self._worker:
             self._worker.deleteLater()
         self._worker = None
