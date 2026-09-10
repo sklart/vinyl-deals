@@ -95,9 +95,9 @@ class MaximumVinylAdapter(PublicHtmlVinylAdapter):
     @staticmethod
     def _condition(value):
         normalized = re.sub(r"\s+", "", (value or "").upper())
-        if normalized in {"NEW", "SEALED", "S"}: return "NEW"
+        if normalized in {"SS", "NEW", "SEALED", "S"}: return "NEW"
         if normalized in {"M", "MINT"}: return "M"
-        if normalized in {"NM", "NEARMINT"}: return "NM"
+        if normalized in {"M-", "NM", "NEARMINT"}: return "NM"
         if normalized.startswith("EX"): return "EX"
         if normalized in {"VG+", "VGPLUS"}: return "VG+"
         if normalized.startswith("VG"): return "VG"

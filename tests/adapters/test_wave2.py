@@ -7,6 +7,7 @@ from vinyl_deals.adapters.wave2 import AVSoundAdapter, MaximumVinylAdapter, Onli
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.domain import Availability, StoreState
 from vinyl_deals.matching.service import build_match_queue
+from vinyl_deals.pricing import condition_bucket
 from vinyl_deals.search import search_releases
 
 
@@ -116,8 +117,23 @@ def test_maximum_vinyl_conditions_are_parsed_and_not_assumed_new():
     listing = adapter.parse_listing((FIXTURES / "maximum_vinyl" / "production_listing.html").read_text(encoding="utf-8"))[1]
     detail = adapter.parse_product_page((FIXTURES / "maximum_vinyl" / "product_conditions.html").read_text(encoding="utf-8"), listing)
     assert (detail.condition_media, detail.condition_sleeve) == ("VG+", "VG")
+    assert condition_bucket(detail) == "vg+"
     confirmed_new = adapter.parse_product_page('<li class="dotted-line"><div class="dotted-line_left"><span class="dotted-line_title">Состояние пластинки:</span></div><div class="dotted-line_right">NEW</div></li><li class="dotted-line"><div class="dotted-line_left"><span class="dotted-line_title">Состояние обложки:</span></div><div class="dotted-line_right">SEALED</div></li>', listing)
     assert (confirmed_new.condition_media, confirmed_new.condition_sleeve) == ("NEW", "NEW")
+
+
+@pytest.mark.parametrize(("media", "sleeve", "expected"), [
+    ("SS", "SS", ("NEW", "NEW")),
+    ("M-", "M-", ("NM", "NM")),
+    ("VG+", "VG", ("VG+", "VG")),
+    ("mystery", "?", ("UNKNOWN", "UNKNOWN")),
+])
+def test_maximum_vinyl_condition_mapping(media, sleeve, expected):
+    adapter = MaximumVinylAdapter()
+    listing = adapter.parse_listing((FIXTURES / "maximum_vinyl" / "production_listing.html").read_text(encoding="utf-8"))[0]
+    html = f'<li class="dotted-line"><div class="dotted-line_left"><span class="dotted-line_title">Состояние пластинки:</span></div><div class="dotted-line_right">{media}</div></li><li class="dotted-line"><div class="dotted-line_left"><span class="dotted-line_title">Состояние обложки:</span></div><div class="dotted-line_right">{sleeve}</div></li>'
+    detail = adapter.parse_product_page(html, listing)
+    assert (detail.condition_media, detail.condition_sleeve) == expected
 
 
 @pytest.mark.parametrize("name, expected", [

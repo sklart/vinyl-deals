@@ -21,6 +21,8 @@ from urllib.request import Request, urlopen
 from vinyl_deals.adapters.base import BaseStoreAdapter
 from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
 
+_UNSET = object()
+
 
 class PublicHtmlVinylAdapter(BaseStoreAdapter):
     """Base class for a public vinyl-only category in a conventional HTML shop."""
@@ -146,7 +148,7 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
                 offers.append(offer)
         return offers
 
-    def _product_from_values(self, *, name: str, url: str, product_id: str, price: Decimal | None, availability_value: str, timestamp: datetime, raw_data: dict[str, object], barcode: str | None = None, store_sku: str | None = None) -> RawOffer | None:
+    def _product_from_values(self, *, name: str, url: str, product_id: str, price: Decimal | None, availability_value: str, timestamp: datetime, raw_data: dict[str, object], barcode: str | None = None, store_sku: object = _UNSET) -> RawOffer | None:
         # URL and bounded product-card properties are useful, independent
         # evidence for stores with mixed media catalogues.  Availability still
         # receives the original card below, so this does not broaden the
@@ -159,7 +161,11 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
         artist, title = self._split_artist_title(name)
         unavailable = re.search(r"(?:нет\s+в\s+наличии|распродан|законч|out[- ]of[- ]stock)", availability_value, re.I)
         available = re.search(r"(?:в\s+наличии|достаточно|instock|in[- ]stock)", availability_value, re.I)
-        return RawOffer(source=self.source, source_product_id=stable_id, store_sku=store_sku if store_sku is not None else product_id or None, url=absolute_url,
+        # HTML-card callers omit the argument and retain their card ID as the
+        # shop SKU.  JSON-LD callers pass explicit ``None`` when no sku was
+        # published, which must not be replaced by productID.
+        resolved_sku = (product_id or None) if store_sku is _UNSET else store_sku
+        return RawOffer(source=self.source, source_product_id=stable_id, store_sku=resolved_sku, url=absolute_url,
             fetched_at=timestamp, artist_raw=artist, title_raw=title, price=price,
             availability=Availability.OUT_OF_STOCK if unavailable else Availability.IN_STOCK if available else Availability.UNKNOWN,
             barcode=barcode, format=self._format(name), condition_media="UNKNOWN", condition_sleeve="UNKNOWN", raw_data=raw_data)

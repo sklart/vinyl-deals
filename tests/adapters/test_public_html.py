@@ -31,6 +31,13 @@ def test_jsonld_sku_and_gtin_have_separate_roles():
     assert (offer.source_product_id, offer.store_sku, offer.barcode, offer.availability) == ("PRODUCT-9", "SHOP-42", "4006381333931", Availability.IN_STOCK)
 
 
+def test_jsonld_product_id_and_gtin_do_not_create_a_store_sku():
+    adapter = _Adapter()
+    html = _json_product('{"@type":"Product","name":"Vinyl Opeth - Blackwater Park LP","url":"/vinyl/opeth","productID":"PRODUCT-9","gtin":"4006381333931","offers":{"price":"5000"}}')
+    offer = adapter.parse_listing(html)[0]
+    assert (offer.source_product_id, offer.store_sku, offer.barcode) == ("PRODUCT-9", None, "4006381333931")
+
+
 def test_jsonld_sku_becomes_source_id_only_without_product_id():
     adapter = _Adapter()
     html = _json_product('{"@type":"Product","name":"Vinyl Opeth - Blackwater Park LP","url":"/vinyl/opeth","sku":"SHOP-42","offers":{"price":"5000"}}')
