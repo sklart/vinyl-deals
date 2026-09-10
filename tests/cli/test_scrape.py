@@ -55,3 +55,10 @@ def test_scrape_passes_page_limit_to_drhead(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["vinyl-deals", "scrape", "drhead", "--page-limit", "1", "--database", str(tmp_path / "offers.sqlite3")])
     assert cli.main() == 0
     assert _PageLimitedAdapter.received_page_limit == 1
+
+
+def test_scrape_passes_page_limit_to_audiomania(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "AudiomaniaAdapter", _PageLimitedAdapter)
+    monkeypatch.setattr("sys.argv", ["vinyl-deals", "scrape", "audiomania", "--page-limit", "1", "--database", str(tmp_path / "offers.sqlite3")])
+    assert cli.main() == 0
+    assert _PageLimitedAdapter.received_page_limit == 1

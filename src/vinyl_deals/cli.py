@@ -117,8 +117,8 @@ def main() -> int:
                 print(f"\nDiscogs: {result.discogs_url}")
             print()
         return 0
-    factories = {"vinyl_ru": VinylRuAdapter, "rio_rostov": RioRostovAdapter, "audiomania": AudiomaniaAdapter, "droog_rostov": DroogRostovAdapter}
-    paged_factories = {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter, "respublica": RespublicaAdapter, "drhead": DrHeadAdapter}
+    factories = {"vinyl_ru": VinylRuAdapter, "rio_rostov": RioRostovAdapter, "droog_rostov": DroogRostovAdapter}
+    paged_factories = {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter, "audiomania": AudiomaniaAdapter, "respublica": RespublicaAdapter, "drhead": DrHeadAdapter}
     adapter = factories[args.source]() if args.source in factories else paged_factories[args.source](page_limit=args.page_limit)
     repository = SQLiteRepository(args.database)
     run_id = repository.start_scrape_run(args.source)
