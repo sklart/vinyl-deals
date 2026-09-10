@@ -9,7 +9,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import PySide6
 from vinyl_deals import __version__
 
 
@@ -24,24 +23,47 @@ def main() -> None:
     metadata = BUILD / "build_meta.json"
     metadata.write_text(json.dumps({"version": __version__, "commit": commit[:12], "build_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")}), encoding="utf-8")
     data = f"{metadata}{os.pathsep}vinyl_deals"
-    pyside = Path(PySide6.__file__).resolve().parent
-    shiboken = pyside.parent / "shiboken6"
     portable = DIST / "VinylDeals"
     gui_dist = BUILD / "gui-dist"
     cli_dist = BUILD / "cli-dist"
-    shutil.rmtree(portable, ignore_errors=True)
+    # A portable installation owns ``data/``.  Rebuilding application binaries
+    # must therefore never erase the complete directory (and a user's SQLite
+    # database, settings or logs with it).  Only replace known build outputs.
+    portable.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(portable / "_internal", ignore_errors=True)
+    for executable in ("vinyl-deals-gui.exe", "vinyl-deals.exe"):
+        (portable / executable).unlink(missing_ok=True)
     shutil.rmtree(gui_dist, ignore_errors=True)
     shutil.rmtree(cli_dist, ignore_errors=True)
-    common = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--specpath", str(BUILD), "--runtime-hook", str(ROOT / "tools" / "pyinstaller_pyside_runtime_hook.py"), "--add-data", data]
+    common = [
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "--onedir",
+        "--specpath",
+        str(BUILD),
+        "--runtime-hook",
+        str(ROOT / "tools" / "pyinstaller_pyside_runtime_hook.py"),
+        "--add-data",
+        data,
+    ]
     for module in ("QtCore", "QtGui", "QtWidgets", "QtNetwork"):
         common.extend(["--hidden-import", f"PySide6.{module}"])
-    for name in ("QtCore.pyd", "QtGui.pyd", "QtWidgets.pyd", "QtNetwork.pyd", "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "Qt6Network.dll", "pyside6.abi3.dll"):
-        common.extend(["--add-binary", f"{pyside / name}{os.pathsep}PySide6"])
-    for name in ("Shiboken.pyd", "shiboken6.abi3.dll"):
-        common.extend(["--add-binary", f"{shiboken / name}{os.pathsep}shiboken6"])
-    common.extend(["--add-binary", f"{pyside / 'plugins' / 'platforms' / 'qwindows.dll'}{os.pathsep}PySide6/plugins/platforms"])
+    # PyInstaller's PySide6 hooks collect the Qt extensions, their dependent
+    # DLLs and the required platform plugins in one consistent layout.  Do not
+    # add those files manually: duplicate Qt DLLs lead Windows to load an
+    # incompatible copy and QtWidgets then fails before the GUI starts.
     subprocess.check_call([*common, "--windowed", "--distpath", str(gui_dist), "--name", "vinyl-deals-gui", str(ROOT / "tools" / "gui_entry.py")], cwd=ROOT)
-    shutil.copytree(gui_dist / "vinyl-deals-gui", portable)
+    shutil.copytree(gui_dist / "vinyl-deals-gui", portable, dirs_exist_ok=True)
+    # PyInstaller can collect ICU 78 from an unrelated dependency into
+    # ``_internal``. Qt's Windows build links against the system ICU ABI and
+    # requires unversioned exports such as ``ucnv_open``; ICU 78 provides only
+    # versioned names and makes Qt6Core fail with WinError 127. Windows ships
+    # the compatible system ICU, so do not distribute the unrelated copies.
+    for library in ("icuuc.dll", "icudt78.dll"):
+        (portable / "_internal" / library).unlink(missing_ok=True)
     subprocess.check_call([*common, "--distpath", str(cli_dist), "--name", "vinyl-deals", str(ROOT / "tools" / "cli_entry.py")], cwd=ROOT)
     shutil.copy2(cli_dist / "vinyl-deals" / "vinyl-deals.exe", portable / "vinyl-deals.exe")
     shutil.make_archive(str(DIST / "VinylDeals-portable"), "zip", root_dir=DIST, base_dir="VinylDeals")

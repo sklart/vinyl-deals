@@ -1,4 +1,4 @@
-"""Make PySide6's bundled Qt DLL directory visible before Qt extension imports."""
+"""Expose both PySide6 and shiboken6 native DLL directories in a frozen app."""
 from __future__ import annotations
 
 import os
@@ -6,12 +6,18 @@ import sys
 from pathlib import Path
 
 
-# Each add_dll_directory() result removes its directory again when it is
-# garbage-collected. Keep the handles alive until the frozen process exits.
 _DLL_DIRECTORY_HANDLES: list[object] = []
 
 if os.name == "nt" and hasattr(sys, "_MEIPASS"):
-    for name in ("PySide6", "shiboken6"):
-        directory = Path(sys._MEIPASS) / name
-        if directory.is_dir():
-            _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(directory)))
+    directories = [
+        Path(sys._MEIPASS),
+        Path(sys._MEIPASS) / "PySide6",
+        Path(sys._MEIPASS) / "shiboken6",
+    ]
+    values = [str(directory) for directory in directories if directory.is_dir()]
+    for directory in values:
+        # Keep handles alive: otherwise Windows removes directories from the
+        # process DLL search path as soon as the handle is collected.
+        _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(directory))
+    if values:
+        os.environ["PATH"] = os.pathsep.join([*values, os.environ.get("PATH", "")])
