@@ -151,5 +151,11 @@ class DrHeadAdapter(BaseStoreAdapter):
 
     @staticmethod
     def _is_blocked(html: str) -> bool:
-        text = html.casefold()
-        return any(marker in text for marker in ("captcha", "smartcaptcha", "проверка безопасности"))
+        # The normal search page embeds SmartCaptcha JavaScript.  It is a
+        # block only when a challenge is present in document markup.
+        text = html.casefold().strip()
+        return (
+            "проверка безопасности" in text
+            or "access-check" in text
+            or bool(re.fullmatch(r"<html>\s*(?:captcha|smartcaptcha)\s*</html>", text))
+        )

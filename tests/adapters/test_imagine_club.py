@@ -37,8 +37,8 @@ def test_catalog_reports_current_page_and_remaining_work() -> None:
 
 def test_targeted_search_uses_verified_drupal_endpoint(monkeypatch) -> None:
     adapter = ImagineClubAdapter()
-    html = Path("tests/fixtures/imagine_club/listing.html").read_text(encoding="utf-8")
+    html = Path("tests/fixtures/imagine_club/live_search_communique.html").read_text(encoding="utf-8")
     calls = []
     monkeypatch.setattr(adapter, "_fetch", lambda url: calls.append(url) or html)
-    result = adapter.search_offers(StoreSearchQuery(artist="10 cc", title="Bloody Tourists"))
-    assert result.offers and calls == ["https://imagine-club.com/search?search_api_views_fulltext=10+cc+Bloody+Tourists"]
+    result = adapter.search_offers(StoreSearchQuery(title="Communique"))
+    assert result.offers and calls == ["https://imagine-club.com/search?search_api_views_fulltext=Communique"]

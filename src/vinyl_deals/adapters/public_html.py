@@ -209,12 +209,24 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
     def _html_cards(self, html: str, timestamp: datetime) -> list[RawOffer]:
         # A bounded card fragment prevents prices/titles leaking from the next
         # product; these CMS class names cover the public Wave 2 templates.
-        chunks = re.split(r'<(?=div\b[^>]*class=["\'][^"\']*(?:product-item|product-thumb|catalog-item|product-card)[^"\']*["\'])', html, flags=re.I)[1:]
+        chunks = re.split(
+            r'<(?=div\b[^>]*class=["\'][^"\']*(?:product-item|product-thumb|catalog-item|catalog_item|product-card|item_block)(?![\w-])[^"\']*["\'])',
+            html,
+            flags=re.I,
+        )[1:]
         offers: list[RawOffer] = []
         for chunk in chunks:
             block = self._card_block(chunk)
-            href = self._first(r'href=["\']([^"\']+)["\']', block)
-            name = self._first(r'(?:itemprop=["\']name["\'][^>]*>|class=["\'][^"\']*(?:name|title)[^"\']*["\'][^>]*>)(.*?)</(?:a|div|span|h[1-6])>', block, re.I | re.S)
+            # Product cards can contain icon SVG links before the card URL.
+            # Prefer schema.org's URL or a normal catalogue/product path.
+            href = self._first(r'itemprop=["\']url["\'][^>]*href=["\']([^"\']+)["\']', block, re.I)
+            if not href:
+                href = self._first(r'href=["\']([^"\']*(?:/catalog/|/product/)[^"\']*)["\']', block, re.I)
+            if not href:
+                href = self._first(r'href=["\']([^"\']+)["\']', block)
+            name = self._first(r'itemprop=["\']name["\'][^>]*content=["\']([^"\']+)', block, re.I)
+            if not name:
+                name = self._first(r'(?:itemprop=["\']name["\'][^>]*>|class=["\'][^"\']*(?:name|title)[^"\']*["\'][^>]*>)(.*?)</(?:a|div|span|h[1-6])>', block, re.I | re.S)
             if not name:
                 name = self._first(r'<a[^>]+href=["\'][^"\']+["\'][^>]*>(.*?)</a>', block, re.I | re.S)
             sku = self._first(r'(?:data-(?:product-)?id|itemprop=["\']sku["\'][^>]*content|Артикул)\s*(?:=|:)["\'\s]*([A-Za-z0-9_-]+)', block, re.I)

@@ -25,8 +25,8 @@ def test_enriched_collectomania_offer_survives_persistence(tmp_path) -> None:
 
 def test_targeted_search_uses_verified_insales_endpoint(monkeypatch) -> None:
     adapter = CollectomaniaAdapter()
-    html = Path("tests/fixtures/collectomania/listing.html").read_text(encoding="utf-8")
+    html = Path("tests/fixtures/collectomania/live_search_communique.html").read_text(encoding="utf-8")
     calls = []
     monkeypatch.setattr(adapter, "_fetch", lambda url: calls.append(url) or html)
-    result = adapter.search_offers(StoreSearchQuery(title="Vultures 1"))
-    assert result.offers and calls == ["https://collectomania.ru/search?q=Vultures+1"]
+    result = adapter.search_offers(StoreSearchQuery(title="Communique"))
+    assert result.offers and calls == ["https://collectomania.ru/search?q=Communique"]

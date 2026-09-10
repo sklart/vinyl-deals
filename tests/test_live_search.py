@@ -6,11 +6,13 @@ from pathlib import Path
 from time import sleep
 
 from vinyl_deals.adapters.vinyl_ru import VinylRuAdapter
+from vinyl_deals.adapters.collectomania import CollectomaniaAdapter
+from vinyl_deals.adapters.imagine_club import ImagineClubAdapter
 from vinyl_deals.adapters.wave2 import MaximumVinylAdapter
 from vinyl_deals.domain import Availability, RawOffer, StoreSearchQuery, StoreSearchResult, StoreState
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.live_search import live_search
-from vinyl_deals.pricing import DealClass
+from vinyl_deals.pricing import DealClass, evaluate_offer, median_price
 
 
 def offer(source: str, identifier: str, price: int, *, barcode: str | None = "4006381333931", catalog: str | None = None) -> RawOffer:
@@ -145,11 +147,13 @@ def test_live_search_uses_multiple_verified_production_adapters_without_catalogu
     vinyl_json = Path("tests/fixtures/vinyl_ru/live_search.json").read_text(encoding="utf-8")
     vinyl_page = Path("tests/fixtures/vinyl_ru/live_search_album.html").read_text(encoding="utf-8")
     maximum_json = Path("tests/fixtures/wave2/maximum_vinyl_live_search.json").read_text(encoding="utf-8")
+    imagine_html = Path("tests/fixtures/imagine_club/live_search_communique.html").read_text(encoding="utf-8")
+    collectomania_html = Path("tests/fixtures/collectomania/live_search_communique.html").read_text(encoding="utf-8")
 
     def vinyl_factory():
         adapter = VinylRuAdapter()
         adapter._fetch_text = lambda url: vinyl_json if "smartSearch" in url else vinyl_page
-        adapter.enrich_offer = lambda item: replace(item, barcode="4006381333931", catalog_number_raw="VERTIGO-6360", raw_data={"fully_enriched": True})
+        adapter.enrich_offer = lambda item: replace(item, artist_raw="Dire Straits", title_raw="Communique", barcode="4006381333931", catalog_number_raw="VERTIGO-6360", condition_media="NEW", condition_sleeve="NEW", raw_data={"fully_enriched": True})
         adapter.get_catalog = lambda: (_ for _ in ()).throw(AssertionError("catalogue must not run"))
         return adapter
 
@@ -157,9 +161,57 @@ def test_live_search_uses_multiple_verified_production_adapters_without_catalogu
         adapter = MaximumVinylAdapter()
         adapter._fetch = lambda _url: maximum_json
         adapter.enrich_offer = lambda item: replace(
+                item,
+                artist_raw="Dire Straits",
+                title_raw="Communique" if item.source_product_id == "8618" else item.title_raw,
+                barcode="4006381333931" if item.source_product_id == "8618" else "3770024955316",
+                catalog_number_raw="VERTIGO-6360" if item.source_product_id == "8618" else "VERTIGO-6361",
+                condition_media="NEW",
+                condition_sleeve="NEW",
+            raw_data={"fully_enriched": True},
+        )
+        adapter.get_catalog = lambda: (_ for _ in ()).throw(AssertionError("catalogue must not run"))
+        return adapter
+
+    def imagine_factory():
+        adapter = ImagineClubAdapter()
+        adapter._fetch = lambda _url: imagine_html
+        original_search = adapter.search_offers
+        def search_one(query):
+            result = original_search(query)
+            return replace(result, offers=result.offers[:1])
+        adapter.search_offers = search_one
+        adapter.enrich_offer = lambda item: replace(
             item,
-            barcode="4006381333931" if item.source_product_id == "8618" else "3770024955316",
-            catalog_number_raw="VERTIGO-6360" if item.source_product_id == "8618" else "VERTIGO-6361",
+            artist_raw="Dire Straits",
+            title_raw="Communique",
+            barcode="4006381333931",
+            catalog_number_raw="VERTIGO-6360",
+            condition_media="NEW",
+            condition_sleeve="NEW",
+            raw_data={"fully_enriched": True},
+        )
+        adapter.get_catalog = lambda: (_ for _ in ()).throw(AssertionError("catalogue must not run"))
+        return adapter
+
+    def collectomania_factory():
+        adapter = CollectomaniaAdapter()
+        adapter._fetch = lambda _url: collectomania_html
+        original_search = adapter.search_offers
+        def search_one(query):
+            result = original_search(query)
+            # The public response also contains the band Communic; take the
+            # exact Dire Straits product card that the search form returned.
+            return replace(result, offers=result.offers[2:3])
+        adapter.search_offers = search_one
+        adapter.enrich_offer = lambda item: replace(
+            item,
+            artist_raw="Dire Straits",
+            title_raw="Communique",
+            barcode="4006381333931",
+            catalog_number_raw="VERTIGO-6360",
+            condition_media="NEW",
+            condition_sleeve="NEW",
             raw_data={"fully_enriched": True},
         )
         adapter.get_catalog = lambda: (_ for _ in ()).throw(AssertionError("catalogue must not run"))
@@ -167,14 +219,30 @@ def test_live_search_uses_multiple_verified_production_adapters_without_catalogu
 
     repository = SQLiteRepository(tmp_path / "production-adapters.sqlite3")
     result = live_search(
-        repository, StoreSearchQuery(artist="Dire Straits"),
-        adapter_factories={"vinyl_ru": vinyl_factory, "maximum_vinyl": maximum_factory},
+        repository, StoreSearchQuery(title="Communique"),
+        adapter_factories={
+            "vinyl_ru": vinyl_factory,
+            "maximum_vinyl": maximum_factory,
+            "imagine_club": imagine_factory,
+            "collectomania": collectomania_factory,
+        },
     )
-    assert {store.source: store.offers for store in result.stores} == {"vinyl_ru": 1, "maximum_vinyl": 2}
-    # The second Maximum Vinyl result uses the accented spelling Communiqué,
-    # so the unaccented query intentionally does not render it. It is still a
-    # distinct persisted Release rather than being merged through title alone.
+    assert {store.source: store.offers for store in result.stores} == {
+        "vinyl_ru": 1,
+        "maximum_vinyl": 2,
+        "imagine_club": 1,
+        "collectomania": 1,
+    }
+    # The second Maximum Vinyl result is a different pressing and remains a
+    # distinct Release even though the live-search responses share a title.
     assert len(repository.releases_for_search()) == 2
     pressing = next(item for item in result.releases if item.barcode == "4006381333931")
-    assert {offer.store for offer in pressing.offers} == {"vinyl_ru", "maximum_vinyl"}
-    assert pressing.lowest_price_offer and pressing.lowest_price_offer.price == Decimal("4500")
+    assert {offer.store for offer in pressing.offers} == {"vinyl_ru", "maximum_vinyl", "imagine_club", "collectomania"}
+    assert pressing.lowest_price_offer is not None
+    target = pressing.lowest_price_offer
+    deal = evaluate_offer(repository, target.offer_id)
+    assert deal is not None
+    comparison_prices = [offer.price for offer in pressing.offers if offer.store != target.store and offer.price is not None]
+    assert deal.comparable_count == 3
+    assert deal.market_median == median_price(comparison_prices)
+    assert deal.discount_pct == (deal.market_median - target.price) / deal.market_median * 100

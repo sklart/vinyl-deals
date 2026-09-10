@@ -58,7 +58,7 @@ class CollectomaniaAdapter(BaseStoreAdapter):
             return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
         try:
             html = self._fetch(f"{self.base_url}/search?{urlencode({'q': query.text()})}")
-            if any(marker in html.casefold() for marker in ("captcha", "access-check", "проверка безопасности")):
+            if self._is_blocked(html):
                 return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Collectomania returned a CAPTCHA/access-check page.",))
             return StoreSearchResult(self.source, tuple(self.parse_listing(html)))
         except (HTTPError, URLError, OSError) as error:
@@ -168,3 +168,13 @@ class CollectomaniaAdapter(BaseStoreAdapter):
         if "в наличии" in value.casefold():
             return Availability.IN_STOCK
         return Availability.OUT_OF_STOCK
+
+    @staticmethod
+    def _is_blocked(html: str) -> bool:
+        """Do not mistake a normal CAPTCHA script dependency for a challenge."""
+        text = html.casefold().strip()
+        return (
+            "access-check" in text
+            or "проверка безопасности" in text
+            or bool(re.fullmatch(r"<html>\s*(?:captcha|recaptcha)\s*</html>", text))
+        )
