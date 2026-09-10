@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-CURRENT_VERSION = 2
+CURRENT_VERSION = 3
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS raw_products (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_product_id TEXT NOT NULL, fetched_at TEXT NOT NULL, payload_json TEXT NOT NULL, UNIQUE(source, source_product_id));
@@ -101,6 +101,36 @@ def migrate_v2(connection: sqlite3.Connection) -> None:
     _backfill_offer_json(connection)
 
 
+def migrate_v3(connection: sqlite3.Connection) -> None:
+    connection.executescript("""
+    CREATE TABLE IF NOT EXISTS watchlist (
+        release_id INTEGER PRIMARY KEY REFERENCES releases(id) ON DELETE CASCADE,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        max_price TEXT,
+        min_deal_class TEXT,
+        local_only INTEGER NOT NULL DEFAULT 0,
+        city TEXT,
+        pickup_only INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS alerts (
+        id INTEGER PRIMARY KEY,
+        release_id INTEGER NOT NULL REFERENCES releases(id) ON DELETE CASCADE,
+        offer_id INTEGER NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL,
+        event_key TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        sent_at TEXT,
+        send_error TEXT,
+        UNIQUE(release_id, offer_id, event_type, event_key)
+    );
+    CREATE INDEX IF NOT EXISTS ix_alerts_unsent ON alerts(sent_at, id);
+    CREATE INDEX IF NOT EXISTS ix_alerts_release ON alerts(release_id, created_at);
+    """)
+
+
 def migrate(connection: sqlite3.Connection) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version > CURRENT_VERSION:
@@ -112,3 +142,7 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 2:
         migrate_v2(connection)
         connection.execute("PRAGMA user_version = 2")
+        version = 2
+    if version < 3:
+        migrate_v3(connection)
+        connection.execute("PRAGMA user_version = 3")

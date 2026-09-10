@@ -15,6 +15,12 @@ def main() -> int:
     deals = commands.add_parser("deals", help="Evaluate matched release offers"); deals.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); deals.add_argument("--min-class", default="NORMAL", choices=["NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); deals.add_argument("--include-insufficient", action="store_true", help="Include historical-only signals with insufficient market data"); deals.add_argument("--limit", type=int, default=50); deals.add_argument("--release-id", type=int); deals.add_argument("--local", action="store_true", help="Show only local-store offers"); deals.add_argument("--city"); deals.add_argument("--pickup", action="store_true", help="Show only offers with confirmed pickup")
     local = commands.add_parser("local", help="Show fresh local offers and transparent effective prices"); local.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); local.add_argument("--city", default="Ростов-на-Дону"); local.add_argument("--pickup", action="store_true"); local.add_argument("--limit", type=int, default=50)
     search = commands.add_parser("search", help="Search matched releases and their current offers"); search.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); search.add_argument("--artist"); search.add_argument("--title"); search.add_argument("--barcode"); search.add_argument("--catalog"); search.add_argument("--label"); search.add_argument("--year", type=int); search.add_argument("--format")
+    watch = commands.add_parser("watchlist", help="Manage tracked releases"); watch.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); watch_commands = watch.add_subparsers(dest="watch_command", required=True)
+    watch_commands.add_parser("list")
+    watch_add = watch_commands.add_parser("add"); watch_add.add_argument("release_id", type=int); watch_add.add_argument("--max-price", type=Decimal); watch_add.add_argument("--min-class", choices=["NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); watch_add.add_argument("--local", action="store_true"); watch_add.add_argument("--city"); watch_add.add_argument("--pickup", action="store_true")
+    for name in ("remove", "enable", "disable"):
+        item = watch_commands.add_parser(name); item.add_argument("release_id", type=int)
+    alerts = commands.add_parser("alerts", help="Evaluate and deliver watchlist alerts"); alerts.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); alert_commands = alerts.add_subparsers(dest="alert_command", required=True); alert_commands.add_parser("check"); alert_commands.add_parser("list"); alert_commands.add_parser("send")
     commands.add_parser("doctor", help="Check local configuration"); args = parser.parse_args()
     if args.command == "doctor":
         repository = SQLiteRepository()
@@ -28,6 +34,44 @@ def main() -> int:
         diagnostics = repository.integrity_diagnostics()
         print("Integrity: OK." if not diagnostics else "Integrity warnings:\n" + "\n".join(f"- {item}" for item in diagnostics))
         return 0
+    if args.command == "watchlist":
+        repository = SQLiteRepository(args.database)
+        if args.watch_command == "list":
+            rows = repository.watchlist_entries()
+            print("Watchlist is empty." if not rows else "\n".join(f"{row['release_id']}: {row['artist']} — {row['title']} ({'enabled' if row['enabled'] else 'disabled'})" for row in rows))
+            return 0
+        if args.watch_command == "add":
+            repository.add_watchlist(args.release_id, max_price=args.max_price, min_deal_class=args.min_class, local_only=args.local, city=args.city, pickup_only=args.pickup)
+            print(f"Watching Release {args.release_id}."); return 0
+        if args.watch_command == "remove":
+            repository.remove_watchlist(args.release_id); print(f"Removed Release {args.release_id} from watchlist."); return 0
+        repository.set_watchlist_enabled(args.release_id, args.watch_command == "enable")
+        print(f"Release {args.release_id} {'enabled' if args.watch_command == 'enable' else 'disabled'}."); return 0
+    if args.command == "alerts":
+        from vinyl_deals.alerts import evaluate_watchlist
+        from vinyl_deals.notifications import TelegramNotifier, format_alert
+        repository = SQLiteRepository(args.database)
+        if args.alert_command == "check":
+            candidates = evaluate_watchlist(repository)
+            print(f"New alerts: {len(candidates)}")
+            for item in candidates: print(f"{item.event_type}: {item.payload['artist']} — {item.payload['title']} ({item.payload['store']})")
+            return 0
+        if args.alert_command == "list":
+            rows = repository.alerts()
+            print("No alerts." if not rows else "\n".join(f"{row['id']}: {row['event_type']} ({'sent' if row['sent_at'] else 'pending'})" for row in rows))
+            return 0
+        notifier = TelegramNotifier()
+        if not notifier.configured:
+            print("Telegram is not configured: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID."); return 2
+        failed = 0
+        for row in repository.alerts(unsent_only=True):
+            try:
+                notifier.send(format_alert(row["payload"]))
+                repository.mark_alert_sent(int(row["id"]))
+            except RuntimeError as error:
+                repository.mark_alert_error(int(row["id"]), str(error)); failed += 1
+        print(f"Telegram sent: {len(repository.alerts()) - len(repository.alerts(unsent_only=True))}, failed: {failed}")
+        return 1 if failed else 0
     if args.command == "match":
         repository = SQLiteRepository(args.database)
         if args.build:

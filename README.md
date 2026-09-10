@@ -20,6 +20,10 @@ vinyl-deals deals --min-class GOOD --limit 50
 vinyl-deals deals --local --city "Ростов-на-Дону" --pickup
 vinyl-deals local --city "Ростов-на-Дону" --pickup
 vinyl-deals search --artist "Opeth" --title "Blackwater Park"
+vinyl-deals watchlist add 12 --max-price 6000 --min-class GOOD
+vinyl-deals watchlist list
+vinyl-deals alerts check
+vinyl-deals alerts send
 vinyl-deals-gui
 vinyl-deals decide-match 12 47 different_release --note "different pressing"
 ```
@@ -41,7 +45,21 @@ vinyl-deals decide-match 12 47 different_release --note "different pressing"
 попадает в базу. В CLI выводятся количества найденных, обогащённых и ошибочных
 карточек.
 
-Telegram, Web UI и новые магазины пока намеренно не реализованы.
+Новые магазины и отдельный GUI для watchlist пока намеренно не реализованы.
+
+## Watchlist и уведомления
+
+`watchlist` отслеживает конкретные сопоставленные Release и не создаёт второй
+экземпляр одного Release. Можно ограничить цену, минимальный класс выгоды,
+локальный магазин, город и самовывоз. `vinyl-deals alerts check` только
+вычисляет новые события и сохраняет историю: `NEW_STOCK`, `PRICE_DROP`,
+`HISTORICAL_LOW`, `GOOD_DEAL` и локальные варианты. Неизменившееся состояние
+повторно не уведомляется, а новая цена или остаток создают новое событие.
+
+Telegram не требуется для проверки alerts. Для отправки задайте только в
+окружении `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID`, затем запустите
+`vinyl-deals alerts send`. Токен и chat id не записываются в SQLite, Git или
+логи; ошибка сети сохраняется у alert и не повреждает историю.
 
 ## Локальные магазины и effective price
 

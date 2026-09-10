@@ -62,3 +62,17 @@ def test_scrape_passes_page_limit_to_audiomania(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["vinyl-deals", "scrape", "audiomania", "--page-limit", "1", "--database", str(tmp_path / "offers.sqlite3")])
     assert cli.main() == 0
     assert _PageLimitedAdapter.received_page_limit == 1
+
+
+def test_watchlist_and_alerts_cli_work_without_telegram(tmp_path, monkeypatch, capsys):
+    database = tmp_path / "offers.sqlite3"
+    monkeypatch.setattr("sys.argv", ["vinyl-deals", "watchlist", "--database", str(database), "list"])
+    assert cli.main() == 0
+    assert "Watchlist is empty" in capsys.readouterr().out
+    monkeypatch.setattr("sys.argv", ["vinyl-deals", "alerts", "--database", str(database), "check"])
+    assert cli.main() == 0
+    assert "New alerts: 0" in capsys.readouterr().out
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False); monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.setattr("sys.argv", ["vinyl-deals", "alerts", "--database", str(database), "send"])
+    assert cli.main() == 2
+    assert "Telegram is not configured" in capsys.readouterr().out

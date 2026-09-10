@@ -20,6 +20,10 @@ class ReleaseMergeConflict(ValueError):
     """Two release clusters cannot safely be merged."""
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def canonical_pair(offer_id: int, candidate_offer_id: int) -> tuple[int, int]:
     if offer_id == candidate_offer_id:
         raise ValueError("A release-match pair requires two different offers.")
@@ -181,6 +185,68 @@ class SQLiteRepository:
         with self._connect() as connection:
             rows = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format FROM releases ORDER BY artist, title, id").fetchall()
         return [Release(*row) for row in rows]
+
+    def release_by_id(self, release_id: int) -> Release | None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format FROM releases WHERE id=?", (release_id,)).fetchone()
+        return Release(*row) if row else None
+
+    def add_watchlist(self, release_id: int, *, max_price: Decimal | None = None, min_deal_class: str | None = None, local_only: bool = False, city: str | None = None, pickup_only: bool = False) -> None:
+        if self.release_by_id(release_id) is None:
+            raise ValueError(f"Release {release_id} does not exist")
+        now = _utc_now()
+        self.initialize()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO watchlist(release_id,enabled,max_price,min_deal_class,local_only,city,pickup_only,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(release_id) DO UPDATE SET enabled=1,max_price=excluded.max_price,min_deal_class=excluded.min_deal_class,local_only=excluded.local_only,city=excluded.city,pickup_only=excluded.pickup_only,updated_at=excluded.updated_at",
+                (release_id, 1, str(max_price) if max_price is not None else None, min_deal_class, int(local_only), city, int(pickup_only), now, now),
+            )
+
+    def set_watchlist_enabled(self, release_id: int, enabled: bool) -> None:
+        self.initialize()
+        with self._connect() as connection:
+            cursor = connection.execute("UPDATE watchlist SET enabled=?, updated_at=? WHERE release_id=?", (int(enabled), _utc_now(), release_id))
+            if not cursor.rowcount:
+                raise ValueError(f"Release {release_id} is not in watchlist")
+
+    def remove_watchlist(self, release_id: int) -> None:
+        self.initialize()
+        with self._connect() as connection:
+            connection.execute("DELETE FROM watchlist WHERE release_id=?", (release_id,))
+
+    def watchlist_entries(self, *, enabled_only: bool = False) -> list[dict[str, object]]:
+        self.initialize()
+        where = "WHERE w.enabled=1" if enabled_only else ""
+        with self._connect() as connection:
+            rows = connection.execute(f"SELECT w.release_id,w.enabled,w.max_price,w.min_deal_class,w.local_only,w.city,w.pickup_only,w.created_at,w.updated_at,r.artist,r.title FROM watchlist w JOIN releases r ON r.id=w.release_id {where} ORDER BY r.artist,r.title").fetchall()
+        keys = ("release_id", "enabled", "max_price", "min_deal_class", "local_only", "city", "pickup_only", "created_at", "updated_at", "artist", "title")
+        return [dict(zip(keys, row, strict=True)) for row in rows]
+
+    def save_alert(self, *, release_id: int, offer_id: int, event_type: str, event_key: str, payload: dict[str, object]) -> bool:
+        self.initialize()
+        with self._connect() as connection:
+            cursor = connection.execute("INSERT OR IGNORE INTO alerts(release_id,offer_id,event_type,event_key,payload_json,created_at) VALUES (?,?,?,?,?,?)", (release_id, offer_id, event_type, event_key, json.dumps(payload, ensure_ascii=False, default=str), _utc_now()))
+            return bool(cursor.rowcount)
+
+    def alerts(self, *, unsent_only: bool = False) -> list[dict[str, object]]:
+        self.initialize()
+        where = "WHERE sent_at IS NULL" if unsent_only else ""
+        with self._connect() as connection:
+            rows = connection.execute(f"SELECT id,release_id,offer_id,event_type,event_key,payload_json,created_at,sent_at,send_error FROM alerts {where} ORDER BY id").fetchall()
+        keys = ("id", "release_id", "offer_id", "event_type", "event_key", "payload_json", "created_at", "sent_at", "send_error")
+        return [{**dict(zip(keys, row, strict=True)), "payload": json.loads(row[5])} for row in rows]
+
+    def mark_alert_sent(self, alert_id: int) -> None:
+        self.initialize()
+        with self._connect() as connection:
+            connection.execute("UPDATE alerts SET sent_at=?, send_error=NULL WHERE id=?", (_utc_now(), alert_id))
+
+    def mark_alert_error(self, alert_id: int, error: str) -> None:
+        self.initialize()
+        with self._connect() as connection:
+            connection.execute("UPDATE alerts SET send_error=? WHERE id=?", (error[:500], alert_id))
 
     def offers_for_release(self, release_id: int) -> list[tuple[int, RawOffer]]:
         """Return persisted offers for one Release without pricing policy."""
