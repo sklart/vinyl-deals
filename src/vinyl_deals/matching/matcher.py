@@ -65,6 +65,19 @@ def match_offers(left: RawOffer, right: RawOffer) -> MatchResult:
         elif state == Comparison.CONFLICT: soft.append(f"{attr} differs")
         else: unknown.append(attr)
     if blocking:
+        # A checked GTIN identifies a concrete commercial pressing more
+        # strongly than store-written artist/title text. Shops frequently add
+        # format, country or a transliteration to the title. Preserve hard
+        # physical conflicts (disc count, size, RPM, colour and edition type),
+        # but do not split the same barcode because of that presentation.
+        if left_barcode and left_barcode == right_barcode:
+            # Artist conflicts remain hard: a corrupted or re-used barcode
+            # must not join different performers. Title display variants are
+            # common enough to tolerate for an otherwise exact GTIN.
+            hard_blocking = [item for item in blocking if item != "title differs"]
+            if not hard_blocking:
+                tolerated = tuple(item for item in blocking if item not in hard_blocking)
+                return MatchResult(MatchKind.EXACT_BARCODE, .99, tuple(matches), (), tuple(soft) + tolerated, tuple(unknown))
         return MatchResult(MatchKind.DIFFERENT, 0.0, tuple(matches), tuple(blocking), tuple(soft), tuple(unknown))
     same_artist_title = artist == title == Comparison.MATCH
     if left_barcode and left_barcode == right_barcode and same_artist_title:

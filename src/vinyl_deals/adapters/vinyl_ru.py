@@ -9,19 +9,24 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from urllib.error import HTTPError
+from html import unescape
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
-from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
+from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
 
 
 class VinylRuAdapter(BaseStoreAdapter):
     source = "vinyl_ru"
     catalog_url = "https://vinyl.ru/local/integration/data/vinyl_catalog_cp1251.csv"
+    base_url = "https://vinyl.ru"
+    search_url = "https://vinyl.ru/local/ajax/smartSearch.php"
 
     def __init__(self, *, timeout_seconds: float = 20.0) -> None:
         self.timeout_seconds = timeout_seconds
@@ -44,6 +49,62 @@ class VinylRuAdapter(BaseStoreAdapter):
                 pages_processed=1,
             )
         return ScrapeResult(offers, pages_processed=1)
+
+    def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
+        """Vinyl.ru public autocomplete followed by its bounded album pages.
+
+        The autocomplete emits canonical public album/product links, not
+        offers.  Only those returned links are fetched; the CSV catalogue is
+        never downloaded as a live-search fallback.
+        """
+        if query.is_empty():
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+        try:
+            payload = json.loads(self._fetch_text(f"{self.search_url}?{urlencode({'term': query.text()})}"))
+            if not isinstance(payload, list):
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Vinyl.ru autocomplete returned an unexpected payload.",))
+            offers: list[RawOffer] = []
+            seen: set[str] = set()
+            for item in payload[:10]:
+                if not isinstance(item, dict):
+                    continue
+                link = str(item.get("link") or "")
+                if not link.startswith("/catalog/"):
+                    continue
+                url = urljoin(self.base_url, link)
+                if url in seen:
+                    continue
+                seen.add(url)
+                offers.extend(self._parse_search_page(self._fetch_text(url)))
+            unique = {offer.source_product_id: offer for offer in offers}
+            return StoreSearchResult(self.source, tuple(unique.values()))
+        except (HTTPError, URLError, OSError, json.JSONDecodeError) as error:
+            detail = f"HTTP {error.code}" if isinstance(error, HTTPError) else type(error).__name__
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Vinyl.ru public search unavailable ({detail}).",))
+
+    def _parse_search_page(self, html: str, *, fetched_at: datetime | None = None) -> list[RawOffer]:
+        timestamp = fetched_at or datetime.now(timezone.utc)
+        offers: list[RawOffer] = []
+        for chunk in re.split(r'<div\s+class=["\']album["\']\s*>', html, flags=re.I)[1:]:
+            path = self._first(r'<a\s+href=["\']([^"\']*?/catalog/item/[^"\']*)', chunk)
+            title = self._first(r'<h4\s+class=["\']album_title["\'][^>]*>\s*<a[^>]*>(.*?)</a>', chunk, re.I | re.S)
+            price = self._price(self._text(self._first(r'<span\s+class=["\']price_current["\'][^>]*>(.*?)</span>', chunk, re.I | re.S)))
+            item_id = self._first(r'data-id=["\'](\d+)', chunk)
+            if not path or not title or price is None:
+                continue
+            artist, album = self._split_artist_title(self._text(re.sub(r"<br\s*/?>", " — ", title, flags=re.I)))
+            offers.append(RawOffer(
+                source=self.source, source_product_id=item_id or hashlib.sha256(path.encode()).hexdigest()[:16],
+                url=urljoin(self.base_url, path), fetched_at=timestamp, artist_raw=artist,
+                title_raw=album, price=price, availability=Availability.IN_STOCK,
+                raw_data={"vinyl_ru_live_search": True},
+            ))
+        return offers
+
+    def _fetch_text(self, url: str) -> str:
+        request = Request(url, headers={"User-Agent": "VinylDeals/0.1 (+public search)"})
+        with urlopen(request, timeout=self.timeout_seconds) as response:  # nosec B310: fixed public HTTPS origin
+            return response.read().decode("utf-8", errors="replace")
 
     def parse_catalog(self, payload: bytes | str, *, fetched_at: datetime | None = None) -> list[RawOffer]:
         if isinstance(payload, bytes):
@@ -121,6 +182,15 @@ class VinylRuAdapter(BaseStoreAdapter):
                 artist, title = name.split(separator, 1)
                 return artist.strip() or None, title.strip() or None
         return None, name
+
+    @staticmethod
+    def _first(pattern: str, value: str, flags: int = 0) -> str:
+        match = re.search(pattern, value, flags)
+        return match.group(1) if match else ""
+
+    @staticmethod
+    def _text(value: str) -> str:
+        return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", value))).strip()
 
     @staticmethod
     def _availability(value: str) -> Availability:

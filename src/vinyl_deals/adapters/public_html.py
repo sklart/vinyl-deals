@@ -7,6 +7,7 @@ catalogue and product URLs.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from hashlib import sha256
@@ -37,6 +38,7 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
     # that path for a different CMS feature or return their home page.
     search_path: str | None = None
     search_parameter = "q"
+    targeted_search_reason = "No verified public targeted-search endpoint is available for this store."
     reports_catalog_progress = True
 
     def __init__(self, *, timeout_seconds: float = 20.0, page_limit: int | None = None, delay_seconds: float = 0.25) -> None:
@@ -76,7 +78,7 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
         if query.is_empty():
             return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
         if not self.search_path:
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} has no verified public targeted-search endpoint.",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} has no verified public targeted-search endpoint. {self.targeted_search_reason}",))
         try:
             html = self._fetch(self._search_url(query))
             if self._is_blocked(html):
@@ -92,6 +94,45 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
         assert self.search_path
         separator = "&" if "?" in self.search_path else "?"
         return urljoin(self.base_url, self.search_path) + separator + urlencode({self.search_parameter: query.text()})
+
+    def _opencart_live_search(self, query: StoreSearchQuery, *, category_id: str = "0") -> StoreSearchResult:
+        """Read a verified Revolution/OpenCart autocomplete JSON endpoint.
+
+        Stores using this method explicitly opt in from their own adapter; it
+        is not a generic HTML fallback.  The public endpoint returns a compact
+        candidate list, and product-page enrichment remains bounded upstream.
+        """
+        if query.is_empty():
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+        url = f"{self.base_url}/index.php?{urlencode({'route': 'common/search/ajaxLiveSearch', 'filter_name': query.text(), 'filter_category_id': category_id})}"
+        try:
+            payload = json.loads(self._fetch(url))
+            if not isinstance(payload, list):
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} search returned an unexpected payload.",))
+            timestamp = datetime.now(timezone.utc)
+            offers: list[RawOffer] = []
+            for item in payload[:20]:
+                if not isinstance(item, dict):
+                    continue
+                raw_price = str(item.get("price") or "")
+                unavailable = "нет в наличии" in raw_price.casefold()
+                price_text = str(item.get("special") or item.get("price") or "")
+                price = None if unavailable else self._money(price_text)
+                offer = self._product_from_values(
+                    name=str(item.get("name1") or item.get("name") or ""),
+                    url=str(item.get("href") or ""),
+                    product_id=str(item.get("product_id") or ""),
+                    price=price if price is not None else Decimal("0"),
+                    availability_value="Нет в наличии" if unavailable else "В наличии",
+                    timestamp=timestamp,
+                    raw_data={"opencart_live_search": True},
+                )
+                if offer:
+                    offers.append(replace(offer, price=price) if unavailable else offer)
+            return StoreSearchResult(self.source, tuple(offers))
+        except (HTTPError, URLError, OSError, json.JSONDecodeError) as error:
+            detail = f"HTTP {error.code}" if isinstance(error, HTTPError) else type(error).__name__
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} public search unavailable ({detail}).",))
 
     @staticmethod
     def _matching_search_cards(offers: list[RawOffer], query: StoreSearchQuery) -> list[RawOffer]:
@@ -318,4 +359,12 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
     @staticmethod
     def _is_blocked(html: str) -> bool:
         text = html.casefold()
-        return any(marker in text for marker in ("captcha", "smartcaptcha", "access-check", "проверка безопасности"))
+        # OnlineTrade's edge challenge exposes these before any catalogue or
+        # search markup. They can legitimately occur in a script element.
+        if "servicepipe.tech" in text or "js-challenge-loader" in text:
+            return True
+        # Normal Bitrix pages often load Yandex CAPTCHA JavaScript even when
+        # no challenge is being shown. Only visible/document markup is proof
+        # that an access-check actually blocked this request.
+        visible = re.sub(r"<(?:script|style)\b[^>]*>.*?</(?:script|style)>", "", text, flags=re.I | re.S)
+        return any(marker in visible for marker in ("captcha", "smartcaptcha", "access-check", "проверка безопасности"))

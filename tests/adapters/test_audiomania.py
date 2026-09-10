@@ -3,7 +3,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from vinyl_deals.adapters.audiomania import AudiomaniaAdapter
-from vinyl_deals.domain import Availability, StoreState
+from vinyl_deals.domain import Availability, StoreSearchQuery, StoreState
 
 
 def test_parses_audiomania_public_server_rendered_product_and_stable_id() -> None:
@@ -110,3 +110,17 @@ def test_audiomania_does_not_refetch_fully_enriched_offer(monkeypatch) -> None:
     assert offer.raw_data["fully_enriched"] is True
     monkeypatch.setattr(adapter, "_fetch", lambda _url: (_ for _ in ()).throw(AssertionError("unexpected repeat request")))
     assert adapter.enrich_offer(offer) is offer
+
+
+def test_audiomania_uses_verified_public_live_search_form(monkeypatch) -> None:
+    adapter = AudiomaniaAdapter()
+    catalogue = Path("tests/fixtures/audiomania/catalogue.html").read_text(encoding="utf-8")
+    miles = Path("tests/fixtures/audiomania/miles_davis.html").read_text(encoding="utf-8")
+    calls: list[str] = []
+    def fetch(url: str) -> str:
+        calls.append(url)
+        return catalogue if "/search/?sq=" in url else miles
+    monkeypatch.setattr(adapter, "_fetch", fetch)
+    result = adapter.search_offers(StoreSearchQuery(artist="Miles Davis", title="Kind Of Blue"))
+    assert result.state == StoreState.ACTIVE
+    assert result.offers and calls[0] == "https://www.audiomania.ru/search/?sq=Miles+Davis+Kind+Of+Blue"

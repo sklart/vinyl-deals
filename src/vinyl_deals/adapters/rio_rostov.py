@@ -21,6 +21,7 @@ from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
 
 class RioRostovAdapter(BaseStoreAdapter):
     source = "rio_rostov"
+    targeted_search_reason = "RIO publishes public collections, but no verified public targeted-search endpoint."
     catalog_url = "https://rio-music.online/m/110aa7/"
     vintage_catalog_url = "https://rio-music.online/m/175c6b/"
     base_url = "https://rio-music.online"

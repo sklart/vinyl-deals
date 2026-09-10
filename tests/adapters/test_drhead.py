@@ -3,7 +3,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from vinyl_deals.adapters.drhead import DrHeadAdapter
-from vinyl_deals.domain import Availability, StoreState
+from vinyl_deals.domain import Availability, StoreSearchQuery, StoreState
 
 
 def test_parses_drhead_embedded_public_product_json() -> None:
@@ -49,3 +49,13 @@ def test_drhead_catalogue_deduplicates_repeated_embedded_items(monkeypatch) -> N
     monkeypatch.setattr(adapter, "_fetch", lambda _url: html + html)
     result = adapter.get_catalog()
     assert len(result.offers) == 2
+
+
+def test_drhead_uses_verified_public_live_search_form(monkeypatch) -> None:
+    adapter = DrHeadAdapter()
+    calls: list[str] = []
+    html = Path("tests/fixtures/drhead/listing.html").read_text(encoding="utf-8")
+    monkeypatch.setattr(adapter, "_fetch", lambda url: calls.append(url) or html)
+    result = adapter.search_offers(StoreSearchQuery(artist="Pink Floyd", title="Wish You Were Here"))
+    assert result.state == StoreState.ACTIVE
+    assert result.offers and calls == ["https://doctorhead.ru/search/?q=Pink+Floyd+Wish+You+Were+Here"]

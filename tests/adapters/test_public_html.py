@@ -62,3 +62,7 @@ def test_unconfigured_html_adapter_refuses_unverified_generic_search():
     result = Unconfigured().search_offers(StoreSearchQuery(title="Communique"))
     assert result.state.value == "degraded"
     assert "no verified" in result.warnings[0]
+
+
+def test_captcha_script_on_a_normal_bitrix_page_is_not_treated_as_a_block() -> None:
+    assert not PublicHtmlVinylAdapter._is_blocked('<script src="/captcha/widget.js"></script><main>Каталог</main>')

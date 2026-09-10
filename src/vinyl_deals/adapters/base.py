@@ -10,6 +10,10 @@ from vinyl_deals.domain import RawOffer, ScrapeResult, StoreSearchQuery, StoreSe
 
 class BaseStoreAdapter(ABC):
     source: str
+    # Every production adapter declares why targeted search is unavailable
+    # until its own public search surface has been verified.  This prevents a
+    # future generic fallback from silently turning into a catalogue crawl.
+    targeted_search_reason: str | None = None
     # Set by refresh orchestration.  Adapters with a known page total report
     # exact pagination; other public adapters still receive generic request
     # progress from the orchestrator.
@@ -33,11 +37,12 @@ class BaseStoreAdapter(ABC):
         Stores which do not publish a usable search surface report DEGRADED;
         the federated service then uses its persisted cache for that source.
         """
+        reason = self.targeted_search_reason or "Public targeted search is not available for this source."
         return StoreSearchResult(
             self.source,
             (),
             StoreState.DEGRADED,
-            ("Public targeted search is not available for this source.",),
+            (reason,),
         )
 
     def get_product(self, source_product_id: str) -> RawOffer | None:

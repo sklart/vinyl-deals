@@ -163,6 +163,13 @@ def test_onlinetrade_representative_catalogue_filters_mixed_media_and_access_che
     assert "captcha" in result.warnings[0].casefold() or "access-check" in result.warnings[0].casefold()
 
 
+def test_onlinetrade_servicepipe_challenge_is_degraded_without_bypass(monkeypatch):
+    adapter = OnlineTradeAdapter(delay_seconds=0)
+    challenge = (FIXTURES / "onlinetrade" / "access_check.html").read_text(encoding="utf-8")
+    monkeypatch.setattr(adapter, "_fetch", lambda _url: challenge)
+    assert adapter.get_catalog().state == StoreState.DEGRADED
+
+
 def test_structured_properties_take_priority_and_do_not_bleed_into_neighbours():
     adapter = OnlineTradeAdapter()
     listing = adapter.parse_listing('<div class="product-item" data-product-id="sku1"><a class="product-title" href="/vinilovaya_plastinka_opeth">Виниловая пластинка Opeth - Blackwater Park (2LP)</a><span class="price">5000</span><span>В наличии</span></div>')[0]

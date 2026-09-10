@@ -7,13 +7,15 @@ from dataclasses import replace
 from urllib.error import HTTPError, URLError
 
 from vinyl_deals.adapters.public_html import PublicHtmlVinylAdapter
-from vinyl_deals.domain import ScrapeResult, StoreState
+from vinyl_deals.domain import ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
 
 
 class VidikaAdapter(PublicHtmlVinylAdapter):
     source, store_name = "vidika", "Vidika"
     catalog_url, base_url = "https://vidika.su/category/zarubezhnyy-vinil/", "https://vidika.su"
     catalog_urls = ("https://vidika.su/category/zarubezhnyy-vinil/", "https://vidika.su/category/russkiy-vinil/")
+    # Public Webasyst header form: GET /search/?query=… .
+    search_path, search_parameter = "/search/", "query"
     def _page_url(self, page, **_kwargs): return f"{self.catalog_url}?page={page}"
 
     def _html_cards(self, html, timestamp):
@@ -75,6 +77,15 @@ class MaximumVinylAdapter(PublicHtmlVinylAdapter):
     catalog_url, base_url = "https://maximumvinyl.ru/vinilovye-plastinki", "https://maximumvinyl.ru"
     def _page_url(self, page): return f"{self.catalog_url}?page={page}"
 
+    def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
+        """Use the public OpenCart autocomplete endpoint for the vinyl category.
+
+        This is the same JSON endpoint loaded by the storefront's header
+        search.  ``filter_category_id=60`` prevents results from CD, books
+        and accessories leaking into a vinyl live search.
+        """
+        return self._opencart_live_search(query, category_id="60")
+
     def parse_product_page(self, html, listing_offer):
         offer = super().parse_product_page(html, listing_offer)
         properties = self._maximum_properties(html)
@@ -108,25 +119,36 @@ class MaximumVinylAdapter(PublicHtmlVinylAdapter):
 class VinylmarktAdapter(PublicHtmlVinylAdapter):
     source, store_name = "vinylmarkt", "Vinylmarkt"
     catalog_url, base_url = "https://vinylmarkt.ru/catalog/vinilovye_plastinki/", "https://vinylmarkt.ru"
+    # Public Bitrix header form: GET /catalog/?q=… .
+    search_path, search_parameter = "/catalog/", "q"
 
 
 class VernoshopAdapter(PublicHtmlVinylAdapter):
     source, store_name = "vernoshop", "Vernoshop"
     catalog_url, base_url = "https://vernoshop.com/", "https://vernoshop.com"
 
+    def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
+        """Vernoshop's public Revolution/OpenCart autocomplete endpoint."""
+        return self._opencart_live_search(query)
+
 
 class TishinaAdapter(PublicHtmlVinylAdapter):
     source, store_name = "tishina", "Тишина"
     catalog_url, base_url = "https://msk.tishina.shop/catalog/vinilovye-plastinki/", "https://msk.tishina.shop"
+    # The public header declares ``type=catalog`` alongside the query.
+    search_path, search_parameter = "/catalog/?type=catalog", "q"
 
 
 class AVSoundAdapter(PublicHtmlVinylAdapter):
     source, store_name = "avsound", "AVSound"
     catalog_url, base_url = "https://avsound.ru/catalog/vinyls/vinilovye-plastinki/ar/", "https://avsound.ru"
+    # Public Bitrix header form: GET /catalog/?q=… .
+    search_path, search_parameter = "/catalog/", "q"
 
 
 class OnlineTradeAdapter(PublicHtmlVinylAdapter):
     source, store_name = "onlinetrade", "OnlineTrade"
+    targeted_search_reason = "OnlineTrade has no verified public targeted-search endpoint."
     catalog_url, base_url = "https://www.onlinetrade.ru/catalogue/vinilovye_plastinki_cd_blu_ray_kassety-c3594/", "https://www.onlinetrade.ru"
 
     @staticmethod
@@ -147,6 +169,7 @@ class PultAdapter(PublicHtmlVinylAdapter):
     """Pult.ru currently denies its public catalogue to this client (HTTP 403)."""
 
     source, store_name = "pult", "Pult.ru"
+    targeted_search_reason = "Pult.ru's public search is access-restricted; no bypass is attempted."
     catalog_url, base_url = "https://www.pult.ru/catalog/vinilovye-plastinki/", "https://www.pult.ru"
 
     def get_catalog(self) -> ScrapeResult:

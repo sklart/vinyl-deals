@@ -139,6 +139,30 @@ Phase 3 добавляет консервативную оценку выгод�
 отдельные надёжные минимумы для новых и б/у пластинок, а также ссылку на
 *поиск* Discogs; конкретный релиз Discogs не утверждается.
 
+## Federated live-search
+
+`vinyl-deals live-search` и кнопка «Найти» в GUI не запускают полный обход
+каталогов. Поддержанные публичные search-поверхности запускаются параллельно,
+а затем программа обогащает только найденные карточки. Сейчас подтверждены:
+
+- Vinyl.ru: autocomplete `/local/ajax/smartSearch.php` и только возвращённые
+  album-страницы;
+- Imagine Club, Collectomania, Dr.Head и Audiomania: публичные header search
+  формы соответствующих сайтов;
+- Vidika: `/search/?query=`;
+- Maximum Vinyl и Vernoshop: публичный OpenCart autocomplete JSON (для
+  Maximum Vinyl запрос ограничен категорией винила);
+- Vinylmarkt, Тишина и AVSound: публичные Bitrix-формы `/catalog/`.
+
+РИО и Respublica пока публикуют безопасные коллекции, но не подтверждённый
+targeted-search endpoint; Vinyl Deals показывает для них `DEGRADED` и, если
+есть, только явно помеченный локальный кэш. OnlineTrade в текущей среде
+отдаёт Servicepipe challenge, а Pult.ru ограничивает публичный доступ —
+защита не обходится и вымышленные предложения не создаются. Поиск
+сопоставляет GTIN, каталожный номер и metadata после ограниченного enrichment:
+одинаковый валидный GTIN остаётся сильнее разницы в написании названия, но
+конфликт исполнителя или физических признаков релиза не объединяется.
+
 ## Desktop GUI
 
 `vinyl-deals-gui` открывает нативное окно PySide6 для Windows. Кнопка «Найти»

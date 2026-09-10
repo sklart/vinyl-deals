@@ -6,7 +6,7 @@ from decimal import Decimal
 from html import unescape
 import re
 from time import sleep
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
@@ -61,8 +61,9 @@ class CollectomaniaAdapter(BaseStoreAdapter):
             if any(marker in html.casefold() for marker in ("captcha", "access-check", "проверка безопасности")):
                 return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Collectomania returned a CAPTCHA/access-check page.",))
             return StoreSearchResult(self.source, tuple(self.parse_listing(html)))
-        except HTTPError as error:
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Collectomania returned HTTP {error.code}.",))
+        except (HTTPError, URLError, OSError) as error:
+            detail = f"HTTP {error.code}" if isinstance(error, HTTPError) else type(error).__name__
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Collectomania public search unavailable ({detail}).",))
 
     def enrich_offer(self, offer: RawOffer) -> RawOffer:
         return self.parse_product_page(self._fetch(offer.url), offer)

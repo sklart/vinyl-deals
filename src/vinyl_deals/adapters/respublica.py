@@ -17,6 +17,7 @@ from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
 
 class RespublicaAdapter(BaseStoreAdapter):
     source = "respublica"
+    targeted_search_reason = "Respublica's current public storefront has no verified server-side targeted-search endpoint."
     catalog_url = "https://www.respublica.ru/muzyka-na-vinile/vinilovye-plastinki?order=new"
     base_url = "https://www.respublica.ru"
 
