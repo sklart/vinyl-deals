@@ -8,7 +8,7 @@ from html import unescape
 import json
 import re
 from time import sleep
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
@@ -27,18 +27,22 @@ class DrHeadAdapter(BaseStoreAdapter):
     def get_catalog(self) -> ScrapeResult:
         try:
             first = self._fetch(self.catalog_url)
+            if self._is_blocked(first):
+                return ScrapeResult((), StoreState.DEGRADED, ("Dr.Head returned a CAPTCHA or access-check page; source paused.",))
             pages = self._page_count(first)
             count = min(pages, self.page_limit) if self.page_limit is not None else pages
             offers: list[RawOffer] = []
             for page in range(1, count + 1):
                 html = first if page == 1 else self._fetch(f"{self.catalog_url}?PAGEN_1={page}")
+                if self._is_blocked(html):
+                    return ScrapeResult((), StoreState.DEGRADED, ("Dr.Head returned a CAPTCHA or access-check page; source paused."), pages_processed=page - 1)
                 offers.extend(self.parse_listing(html))
                 if page < count and self.delay_seconds:
                     sleep(self.delay_seconds)
-        except HTTPError as error:
-            if error.code in {403, 429}:
-                return ScrapeResult((), StoreState.DEGRADED, (f"Dr.Head returned HTTP {error.code}; source paused.",))
-            raise
+        except (HTTPError, URLError, OSError) as error:
+            status = getattr(error, "code", None)
+            detail = f"HTTP {status}" if status in {403, 429} else type(error).__name__
+            return ScrapeResult((), StoreState.DEGRADED, (f"Dr.Head public catalogue unavailable ({detail}); source paused.",))
         unique = {offer.source_product_id: offer for offer in offers}
         if not unique:
             return ScrapeResult((), StoreState.DEGRADED, ("Dr.Head catalogue parsed zero offers; parser may be stale."), pages_processed=pages if 'pages' in locals() else 0)
@@ -77,7 +81,7 @@ class DrHeadAdapter(BaseStoreAdapter):
         content = self._text(html)
         barcode = self._first(r'(?:EAN|Штрих[ -]?код|Barcode)\s*[:#]?\s*(\d{12,14})', content, re.I) or listing_offer.barcode
         catalog = self._first(r'(?:Артикул|Каталожный\s+номер)\s*[:#]?\s*([A-Za-z0-9._/-]+)', content, re.I) or listing_offer.catalog_number_raw
-        year = self._year(content) or listing_offer.release_year
+        year = self._release_year(content)
         return RawOffer(**{**{name: getattr(listing_offer, name) for name in listing_offer.__dataclass_fields__},
             "barcode": barcode, "catalog_number_raw": catalog, "release_year": year,
             "format": self._format(content) or listing_offer.format, "raw_data": {**listing_offer.raw_data, "public_card": True},
@@ -123,6 +127,17 @@ class DrHeadAdapter(BaseStoreAdapter):
         return re.sub(r"\s+", "", match.group()).upper() if match else None
 
     @staticmethod
-    def _year(value: str) -> int | None:
-        match = re.search(r"\b(?:19|20)\d{2}\b", value)
-        return int(match.group()) if match else None
+    def _release_year(value: str) -> int | None:
+        # Do not infer a release year from copyright dates, biography text or
+        # review prose.  Only a named product characteristic is trustworthy.
+        match = re.search(
+            r"(?:\u0413\u043e\u0434\s+\u0432\u044b\u043f\u0443\u0441\u043a\u0430|\u0413\u043e\u0434|\u0414\u0430\u0442\u0430\s+\u0440\u0435\u043b\u0438\u0437\u0430|Release\s+year)\s*[:#-]?\s*((?:19|20)\d{2})(?!\d)",
+            value,
+            re.I,
+        )
+        return int(match.group(1)) if match else None
+
+    @staticmethod
+    def _is_blocked(html: str) -> bool:
+        text = html.casefold()
+        return any(marker in text for marker in ("captcha", "smartcaptcha", "проверка безопасности"))

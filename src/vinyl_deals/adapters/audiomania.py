@@ -16,18 +16,23 @@ from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
 
 class AudiomaniaAdapter(BaseStoreAdapter):
     source = "audiomania"
-    catalog_url = "https://www.audiomania.ru/vinyl/"
+    # This is the public category for music vinyl records, not the site's
+    # generic /vinyl/ section which also contains hi-fi equipment.
+    catalog_url = "https://www.audiomania.ru/vinilovye_plastinki/"
 
     def __init__(self, *, timeout_seconds: float = 20.0) -> None:
         self.timeout_seconds = timeout_seconds
 
     def get_catalog(self) -> ScrapeResult:
         try:
-            offers = self.parse_listing(self._fetch(self.catalog_url))
+            html = self._fetch(self.catalog_url)
         except (HTTPError, URLError, OSError) as error:
             status = getattr(error, "code", None)
             detail = f"HTTP {status}" if status in {403, 429} else type(error).__name__
             return ScrapeResult((), StoreState.DEGRADED, (f"Audiomania public catalogue unavailable ({detail}); source paused.",))
+        if self._is_blocked(html):
+            return ScrapeResult((), StoreState.DEGRADED, ("Audiomania returned a CAPTCHA or access-check page; source paused.",))
+        offers = self.parse_listing(html)
         if not offers:
             return ScrapeResult((), StoreState.DEGRADED, ("Audiomania catalogue parsed zero offers; parser may be stale."), pages_processed=1)
         return ScrapeResult(tuple({offer.source_product_id: offer for offer in offers}.values()), pages_processed=1)
@@ -44,7 +49,7 @@ class AudiomaniaAdapter(BaseStoreAdapter):
             price_data = product.get("offers") if isinstance(product.get("offers"), dict) else {}
             price = self._decimal(price_data.get("price"))
             url = str(product.get("url") or "")
-            if not product_id or not name or price is None or not url:
+            if not self._is_vinyl_product(product) or not product_id or not name or price is None or not url:
                 continue
             artist, title = self._split_artist_title(name)
             availability = Availability.IN_STOCK if "instock" in str(price_data.get("availability", "")).casefold() else Availability.OUT_OF_STOCK
@@ -54,7 +59,9 @@ class AudiomaniaAdapter(BaseStoreAdapter):
         return offers
 
     def parse_product_page(self, html: str, listing_offer: RawOffer) -> RawOffer:
-        product = next(iter(self._products_from_jsonld(html)), {})
+        products = self._products_from_jsonld(html)
+        product = next((item for item in products
+                        if str(item.get("sku") or item.get("productID") or "") == listing_offer.source_product_id), products[0] if len(products) == 1 else {})
         barcode = str(product.get("gtin13") or product.get("gtin") or "") or listing_offer.barcode
         catalog = str(product.get("mpn") or "") or listing_offer.catalog_number_raw
         brand = product.get("brand")
@@ -90,6 +97,25 @@ class AudiomaniaAdapter(BaseStoreAdapter):
                     if isinstance(value, dict): queue.append(value)
                     elif isinstance(value, list): queue.extend(value)
         return products
+
+    @staticmethod
+    def _is_vinyl_product(product: dict[str, object]) -> bool:
+        """Accept products explicitly placed in Audiomania's record category.
+
+        A product name mentioning vinyl is not sufficient: turntables and
+        accessories use the same vocabulary.  The public category or product
+        URL is the durable, unambiguous signal.
+        """
+        category = product.get("category")
+        categories = category if isinstance(category, list) else [category]
+        category_text = " ".join(str(value) for value in categories if value).casefold()
+        url = str(product.get("url") or "").casefold()
+        return "vinilovye_plastinki" in url or "виниловые пластинки" in category_text
+
+    @staticmethod
+    def _is_blocked(html: str) -> bool:
+        text = html.casefold()
+        return any(marker in text for marker in ("captcha", "smartcaptcha", "проверка безопасности"))
 
     @staticmethod
     def _decimal(value: object) -> Decimal | None:

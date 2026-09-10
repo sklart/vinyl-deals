@@ -40,3 +40,9 @@ def test_respublica_catalogue_deduplicates_repeated_cards(monkeypatch) -> None:
     monkeypatch.setattr(adapter, "_fetch", lambda _url: html + html)
     result = adapter.get_catalog()
     assert len(result.offers) == 2
+
+
+def test_respublica_captcha_page_is_degraded(monkeypatch) -> None:
+    adapter = RespublicaAdapter(page_limit=1)
+    monkeypatch.setattr(adapter, "_fetch", lambda _url: "<html>проверка безопасности</html>")
+    assert adapter.get_catalog().state == StoreState.DEGRADED

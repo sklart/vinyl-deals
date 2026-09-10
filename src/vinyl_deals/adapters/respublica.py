@@ -7,7 +7,7 @@ from decimal import Decimal
 from html import unescape
 import re
 from time import sleep
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
@@ -26,17 +26,22 @@ class RespublicaAdapter(BaseStoreAdapter):
     def get_catalog(self) -> ScrapeResult:
         try:
             offers: list[RawOffer] = []
-            pages = self._page_count(self._fetch(self.catalog_url))
+            first = self._fetch(self.catalog_url)
+            if self._is_blocked(first):
+                return ScrapeResult((), StoreState.DEGRADED, ("Respublica returned a CAPTCHA or access-check page; source paused.",))
+            pages = self._page_count(first)
             count = min(pages, self.page_limit) if self.page_limit is not None else pages
             for page in range(1, count + 1):
-                html = self._fetch(self.catalog_url if page == 1 else f"{self.catalog_url}&page={page}")
+                html = first if page == 1 else self._fetch(f"{self.catalog_url}&page={page}")
+                if self._is_blocked(html):
+                    return ScrapeResult((), StoreState.DEGRADED, ("Respublica returned a CAPTCHA or access-check page; source paused."), pages_processed=page - 1)
                 offers.extend(self.parse_listing(html))
                 if page < count and self.delay_seconds:
                     sleep(self.delay_seconds)
-        except HTTPError as error:
-            if error.code in {403, 429}:
-                return ScrapeResult((), StoreState.DEGRADED, (f"Respublica returned HTTP {error.code}; source paused.",))
-            raise
+        except (HTTPError, URLError, OSError) as error:
+            status = getattr(error, "code", None)
+            detail = f"HTTP {status}" if status in {403, 429} else type(error).__name__
+            return ScrapeResult((), StoreState.DEGRADED, (f"Respublica public catalogue unavailable ({detail}); source paused.",))
         unique = {offer.source_product_id: offer for offer in offers}
         if not unique:
             return ScrapeResult((), StoreState.DEGRADED, ("Respublica catalogue parsed zero offers; parser may be stale."), pages_processed=pages if 'pages' in locals() else 0)
@@ -123,3 +128,8 @@ class RespublicaAdapter(BaseStoreAdapter):
     def _year(value: str) -> int | None:
         match = re.search(r"(?:19|20)\d{2}", value)
         return int(match.group()) if match else None
+
+    @staticmethod
+    def _is_blocked(html: str) -> bool:
+        text = html.casefold()
+        return any(marker in text for marker in ("captcha", "smartcaptcha", "проверка безопасности"))

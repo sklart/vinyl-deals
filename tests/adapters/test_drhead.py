@@ -28,6 +28,21 @@ def test_enriches_drhead_card_and_degrades_zero_products(monkeypatch) -> None:
     assert result.state == StoreState.DEGRADED
 
 
+def test_drhead_uses_only_named_release_year_property() -> None:
+    adapter = DrHeadAdapter()
+    listing = adapter.parse_listing(Path("tests/fixtures/drhead/listing.html").read_text(encoding="utf-8"))[0]
+    no_property = adapter.parse_product_page("<main>© 2026. Альбом 1994 года.</main>", listing)
+    english_property = adapter.parse_product_page("<main>Release year: 2021</main>", listing)
+    assert no_property.release_year is None
+    assert english_property.release_year == 2021
+
+
+def test_drhead_captcha_page_is_degraded(monkeypatch) -> None:
+    adapter = DrHeadAdapter(page_limit=1)
+    monkeypatch.setattr(adapter, "_fetch", lambda _url: "<html>smartcaptcha</html>")
+    assert adapter.get_catalog().state == StoreState.DEGRADED
+
+
 def test_drhead_catalogue_deduplicates_repeated_embedded_items(monkeypatch) -> None:
     adapter = DrHeadAdapter(page_limit=1)
     html = Path("tests/fixtures/drhead/listing.html").read_text(encoding="utf-8")

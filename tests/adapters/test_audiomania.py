@@ -26,6 +26,21 @@ def test_audiomania_enrichment_and_unavailable_source_degrade(monkeypatch) -> No
     assert adapter.get_catalog().state == StoreState.DEGRADED
 
 
+def test_audiomania_ignores_malformed_and_non_vinyl_jsonld_products() -> None:
+    adapter = AudiomaniaAdapter()
+    html = '''<script type="application/ld+json">[
+      {"@type":"Product","sku":"TURN-1","name":"Проигрыватель винила","url":"https://www.audiomania.ru/proigryvateli_vinila/a.html","category":"Проигрыватели винила","offers":{"price":"50000"}},
+      {"@type":"Product","sku":"BROKEN","name":"Без цены","url":"https://www.audiomania.ru/vinilovye_plastinki/b.html","category":"Виниловые пластинки","offers":{}}
+    ]</script>'''
+    assert adapter.parse_listing(html) == []
+
+
+def test_audiomania_captcha_page_is_degraded(monkeypatch) -> None:
+    adapter = AudiomaniaAdapter()
+    monkeypatch.setattr(adapter, "_fetch", lambda _url: "<html>CAPTCHA</html>")
+    assert adapter.get_catalog().state == StoreState.DEGRADED
+
+
 def test_audiomania_catalogue_deduplicates_repeated_public_product(monkeypatch) -> None:
     adapter = AudiomaniaAdapter()
     html = Path("tests/fixtures/audiomania/listing.html").read_text(encoding="utf-8")
