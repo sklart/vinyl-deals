@@ -1,6 +1,7 @@
 """In-process periodic refresh and alert cycle for the desktop application."""
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
@@ -12,10 +13,12 @@ from vinyl_deals.updates import refresh_catalogs
 
 
 ALLOWED_INTERVALS = (15, 30, 60, 180, 360)
+logger = logging.getLogger("vinyl_deals.scheduler")
 
 
 def run_cycle(repository: SQLiteRepository, *, refresh_service: Callable = refresh_catalogs, auto_send: bool = False, progress: Callable[[str], None] | None = None) -> dict[str, int]:
     emit = progress or (lambda _message: None)
+    logger.info("Scheduler cycle started")
     refresh_service(repository, progress=emit)
     emit("Проверка watchlist...")
     alerts = evaluate_watchlist(repository)
@@ -28,6 +31,7 @@ def run_cycle(repository: SQLiteRepository, *, refresh_service: Callable = refre
             # Telegram configuration is optional; an unavailable transport
             # must never roll back alerts produced by this cycle.
             pass
+    logger.info("Scheduler cycle completed: alerts=%s sent=%s failed=%s", len(alerts), sent, failed)
     return {"alerts": len(alerts), "sent": sent, "failed": failed}
 
 
@@ -41,7 +45,9 @@ class CycleWorker(QThread):
 
     def run(self) -> None:
         try: self.completed.emit(run_cycle(self.repository, refresh_service=self.refresh_service, auto_send=self.auto_send, progress=self.progress.emit))
-        except Exception as error: self.failed.emit(str(error))
+        except Exception as error:
+            logger.exception("Scheduler cycle failed")
+            self.failed.emit(str(error))
 
 
 class Scheduler(QObject):

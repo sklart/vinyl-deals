@@ -19,3 +19,19 @@ jobs:
       - run: python -m pip install --upgrade pip pytest
       - run: python -m pip install -e .
       - run: python -m pytest
+
+  windows-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip pyinstaller
+      - run: python -m pip install .
+      - run: python tools/build_windows.py
+      - run: .\dist\vinyl-deals-gui\vinyl-deals-gui.exe --smoke-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vinyl-deals-windows
+          path: dist/

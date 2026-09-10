@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QTabWidget,
@@ -29,6 +31,9 @@ from PySide6.QtWidgets import (
 )
 
 from vinyl_deals.database.repository import SQLiteRepository
+from vinyl_deals import autostart
+from vinyl_deals.build_metadata import metadata as build_metadata
+from vinyl_deals.runtime import application_database_path
 from vinyl_deals.scheduler import ALLOWED_INTERVALS, Scheduler
 from vinyl_deals.search import ReleaseSearchResult, search_releases
 from vinyl_deals.updates import refresh_catalogs
@@ -39,9 +44,9 @@ from .workers import TaskWorker, UpdateWorker
 class MainWindow(QMainWindow):
     """Native Qt shell that delegates search and updates to application services."""
 
-    def __init__(self, database: Path | str = "vinyl_deals.sqlite3", *, search_service: Callable = search_releases, update_service: Callable = refresh_catalogs, url_opener: Callable[[QUrl], bool] = QDesktopServices.openUrl, scheduler_factory: Callable = Scheduler) -> None:
+    def __init__(self, database: Path | str | None = None, *, search_service: Callable = search_releases, update_service: Callable = refresh_catalogs, url_opener: Callable[[QUrl], bool] = QDesktopServices.openUrl, scheduler_factory: Callable = Scheduler) -> None:
         super().__init__()
-        self.repository = SQLiteRepository(database)
+        self.repository = SQLiteRepository(database or application_database_path())
         self.search_service = search_service
         self.update_service = update_service
         self.url_opener = url_opener
@@ -83,9 +88,10 @@ class MainWindow(QMainWindow):
         self.refresh_button = QPushButton("Обновить данные")
         self.open_store_button = QPushButton("Открыть магазин")
         self.open_discogs_button = QPushButton("Открыть Discogs")
+        self.about_button = QPushButton("О программе")
         self.open_store_button.setEnabled(False)
         self.open_discogs_button.setEnabled(False)
-        for button in (self.search_button, self.clear_button, self.refresh_button, self.open_store_button, self.open_discogs_button):
+        for button in (self.search_button, self.clear_button, self.refresh_button, self.open_store_button, self.open_discogs_button, self.about_button):
             buttons.addWidget(button)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -112,6 +118,7 @@ class MainWindow(QMainWindow):
         self.offer_table.itemDoubleClicked.connect(lambda _: self.open_selected_offer())
         self.open_store_button.clicked.connect(self.open_selected_offer)
         self.open_discogs_button.clicked.connect(self.open_discogs)
+        self.about_button.clicked.connect(self.show_about)
 
     def _build_tracking_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page)
@@ -129,8 +136,11 @@ class MainWindow(QMainWindow):
         self.scheduler_enabled = QCheckBox("Автопроверка")
         self.scheduler_interval = QComboBox(); self.scheduler_interval.addItems([str(value) for value in ALLOWED_INTERVALS])
         self.scheduler_auto_send = QCheckBox("Автоотправка Telegram")
+        self.autostart_enabled = QCheckBox("Автозапуск Windows")
+        self.autostart_enabled.setChecked(autostart.is_enabled())
+        self.autostart_enabled.setEnabled(os.name == "nt")
         self.scheduler_run_button = QPushButton("Проверить сейчас")
-        for widget in (self.scheduler_enabled, QLabel("Интервал (мин):"), self.scheduler_interval, self.scheduler_auto_send, self.scheduler_run_button): scheduler_controls.addWidget(widget)
+        for widget in (self.scheduler_enabled, QLabel("Интервал (мин):"), self.scheduler_interval, self.scheduler_auto_send, self.autostart_enabled, self.scheduler_run_button): scheduler_controls.addWidget(widget)
         scheduler_controls.addStretch(); layout.addLayout(scheduler_controls)
         alert_controls = QHBoxLayout(); self.alert_open_store_button = QPushButton("Открыть магазин"); self.alert_open_discogs_button = QPushButton("Открыть Discogs"); self.alert_send_button = QPushButton("Отправить pending alerts")
         for button in (self.alert_open_store_button, self.alert_open_discogs_button, self.alert_send_button): alert_controls.addWidget(button)
@@ -145,6 +155,7 @@ class MainWindow(QMainWindow):
         self.scheduler_enabled.toggled.connect(self.save_scheduler_settings)
         self.scheduler_interval.currentTextChanged.connect(self.save_scheduler_settings)
         self.scheduler_auto_send.toggled.connect(self.save_scheduler_settings)
+        self.autostart_enabled.toggled.connect(self.save_autostart)
         self.scheduler_run_button.clicked.connect(self.run_scheduler_cycle)
         self.alert_table.itemSelectionChanged.connect(self._update_alert_actions)
         self.alert_open_store_button.clicked.connect(self.open_alert_store)
@@ -261,6 +272,19 @@ class MainWindow(QMainWindow):
         settings = QSettings("VinylDeals", "Desktop"); settings.setValue("scheduler/enabled", enabled); settings.setValue("scheduler/interval", interval); settings.setValue("scheduler/auto_send", auto_send); self.scheduler.configure(enabled=enabled, interval_minutes=interval, auto_send=auto_send)
         if enabled and not self._updating:
             self.status_label.setText(f"Следующая проверка: через {interval} мин.")
+
+    def save_autostart(self, enabled: bool) -> None:
+        try:
+            autostart.set_enabled(enabled)
+        except RuntimeError as error:
+            self.status_label.setText(str(error))
+            self.autostart_enabled.blockSignals(True)
+            self.autostart_enabled.setChecked(False)
+            self.autostart_enabled.blockSignals(False)
+
+    def show_about(self) -> None:
+        details = build_metadata()
+        QMessageBox.information(self, "О Vinyl Deals", f"Vinyl Deals Russia\nВерсия: {details.get('version', 'unknown')}\nСборка: {details.get('build_date', 'unknown')}\nCommit: {details.get('commit', 'unknown')}")
 
     def run_scheduler_cycle(self) -> None:
         if self._scheduler_start_allowed() and self.scheduler.trigger(): self.status_label.setText("Обновление...")
@@ -436,7 +460,7 @@ class MainWindow(QMainWindow):
             field.setEnabled(not updating)
         for control in (self.search_button, self.clear_button, self.refresh_button, self.release_table, self.offer_table):
             control.setEnabled(not updating)
-        for control in (self.watch_add_button, self.watch_remove_button, self.watch_enable_button, self.watch_edit_button, self.watch_open_button, self.watch_table, self.scheduler_enabled, self.scheduler_interval, self.scheduler_auto_send, self.scheduler_run_button, self.alert_table, self.alert_open_store_button, self.alert_open_discogs_button, self.alert_send_button):
+        for control in (self.watch_add_button, self.watch_remove_button, self.watch_enable_button, self.watch_edit_button, self.watch_open_button, self.watch_table, self.scheduler_enabled, self.scheduler_interval, self.scheduler_auto_send, self.autostart_enabled, self.scheduler_run_button, self.alert_table, self.alert_open_store_button, self.alert_open_discogs_button, self.alert_send_button):
             control.setEnabled(not updating)
         self._update_open_actions()
 
