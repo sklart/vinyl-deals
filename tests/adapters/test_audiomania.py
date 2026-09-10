@@ -113,14 +113,20 @@ def test_audiomania_does_not_refetch_fully_enriched_offer(monkeypatch) -> None:
 
 
 def test_audiomania_uses_verified_public_live_search_form(monkeypatch) -> None:
-    adapter = AudiomaniaAdapter()
-    catalogue = Path("tests/fixtures/audiomania/catalogue.html").read_text(encoding="utf-8")
-    miles = Path("tests/fixtures/audiomania/miles_davis.html").read_text(encoding="utf-8")
+    adapter = AudiomaniaAdapter(page_limit=1)
+    search = Path("tests/fixtures/audiomania/live_search_kind_of_blue.html").read_text(encoding="utf-8")
+    product = Path("tests/fixtures/audiomania/live_search_kind_of_blue_product.html").read_text(encoding="utf-8")
     calls: list[str] = []
     def fetch(url: str) -> str:
         calls.append(url)
-        return catalogue if "/search/?sq=" in url else miles
+        return search if "/search/?sq=" in url else product
     monkeypatch.setattr(adapter, "_fetch", fetch)
     result = adapter.search_offers(StoreSearchQuery(artist="Miles Davis", title="Kind Of Blue"))
     assert result.state == StoreState.ACTIVE
-    assert result.offers and calls[0] == "https://www.audiomania.ru/search/?sq=Miles+Davis+Kind+Of+Blue"
+    assert calls == [
+        "https://www.audiomania.ru/search/?sq=Miles+Davis+Kind+Of+Blue",
+        "https://www.audiomania.ru/vinilovye_plastinki/miles_davis/miles_davis_kind_of_blue_reissue_repress_180_gr.html",
+    ]
+    assert [(offer.source_product_id, offer.price, offer.barcode, offer.availability) for offer in result.offers] == [
+        ("42430", Decimal("3490"), "0888751119215", Availability.IN_STOCK),
+    ]

@@ -223,7 +223,10 @@ class AudiomaniaAdapter(BaseStoreAdapter):
         """Public root links have one artist directory plus a .html card."""
         urls = []
         for path in re.findall(r'href=["\']([^"\']+)["\']', html, re.I):
-            url = urljoin(self.base_url, path)
+            # Search cards link to an article anchor (``…html#42430``).
+            # It is not part of the product URL and must not prevent the
+            # normal ``.html`` vinyl-card check below.
+            url = urljoin(self.base_url, path).split("#", 1)[0]
             if self._is_vinyl_url(url) and url.split("?", 1)[0].casefold().endswith(".html"):
                 urls.append(url)
         return list(dict.fromkeys(urls))
