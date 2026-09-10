@@ -105,11 +105,14 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
                     product_type = product.get("@type") if isinstance(product, dict) else None
                     if not isinstance(product, dict) or (product_type != "Product" and product_type != ["Product"]):
                         continue
+                    sku = str(product.get("sku") or "")
+                    product_id = str(product.get("productID") or sku)
+                    barcode = str(product.get("gtin13") or product.get("gtin") or product.get("ean") or "") or None
                     offer = self._product_from_values(
                         name=str(product.get("name") or ""), url=str(product.get("url") or ""),
-                        product_id=str(product.get("sku") or product.get("productID") or product.get("gtin13") or ""),
+                        product_id=product_id,
                         price=self._offer_price(product.get("offers")), availability_value=str((product.get("offers") or {}).get("availability") or ""),
-                        timestamp=timestamp, raw_data={"json_ld": True}, barcode=str(product.get("gtin13") or product.get("gtin") or "") or None,
+                        timestamp=timestamp, raw_data={"json_ld": True}, barcode=barcode, store_sku=sku or None,
                     )
                     if offer:
                         offers.append(offer)
@@ -143,7 +146,7 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
                 offers.append(offer)
         return offers
 
-    def _product_from_values(self, *, name: str, url: str, product_id: str, price: Decimal | None, availability_value: str, timestamp: datetime, raw_data: dict[str, object], barcode: str | None = None) -> RawOffer | None:
+    def _product_from_values(self, *, name: str, url: str, product_id: str, price: Decimal | None, availability_value: str, timestamp: datetime, raw_data: dict[str, object], barcode: str | None = None, store_sku: str | None = None) -> RawOffer | None:
         # URL and bounded product-card properties are useful, independent
         # evidence for stores with mixed media catalogues.  Availability still
         # receives the original card below, so this does not broaden the
@@ -156,10 +159,10 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
         artist, title = self._split_artist_title(name)
         unavailable = re.search(r"(?:нет\s+в\s+наличии|распродан|законч|out[- ]of[- ]stock)", availability_value, re.I)
         available = re.search(r"(?:в\s+наличии|достаточно|instock|in[- ]stock)", availability_value, re.I)
-        return RawOffer(source=self.source, source_product_id=stable_id, store_sku=product_id or None, url=absolute_url,
+        return RawOffer(source=self.source, source_product_id=stable_id, store_sku=store_sku if store_sku is not None else product_id or None, url=absolute_url,
             fetched_at=timestamp, artist_raw=artist, title_raw=title, price=price,
             availability=Availability.OUT_OF_STOCK if unavailable else Availability.IN_STOCK if available else Availability.UNKNOWN,
-            barcode=barcode, format=self._format(name), condition_media="NEW", condition_sleeve="NEW", raw_data=raw_data)
+            barcode=barcode, format=self._format(name), condition_media="UNKNOWN", condition_sleeve="UNKNOWN", raw_data=raw_data)
 
     def _page_url(self, page: int) -> str:
         """Override per store when its public catalogue uses another query key."""

@@ -75,6 +75,35 @@ class MaximumVinylAdapter(PublicHtmlVinylAdapter):
     catalog_url, base_url = "https://maximumvinyl.ru/vinilovye-plastinki", "https://maximumvinyl.ru"
     def _page_url(self, page): return f"{self.catalog_url}?page={page}"
 
+    def parse_product_page(self, html, listing_offer):
+        offer = super().parse_product_page(html, listing_offer)
+        properties = self._maximum_properties(html)
+        return replace(
+            offer,
+            condition_media=self._condition(properties.get("состояние пластинки")),
+            condition_sleeve=self._condition(properties.get("состояние обложки")),
+        )
+
+    @classmethod
+    def _maximum_properties(cls, html):
+        pairs = re.findall(
+            r'dotted-line_title[^>]*>(.*?)</span>.*?dotted-line_right[^>]*>(.*?)</div>\s*</li>',
+            html, re.I | re.S,
+        )
+        return {cls._text(key).rstrip(":").casefold(): cls._text(value) for key, value in pairs}
+
+    @staticmethod
+    def _condition(value):
+        normalized = re.sub(r"\s+", "", (value or "").upper())
+        if normalized in {"NEW", "SEALED", "S"}: return "NEW"
+        if normalized in {"M", "MINT"}: return "M"
+        if normalized in {"NM", "NEARMINT"}: return "NM"
+        if normalized.startswith("EX"): return "EX"
+        if normalized in {"VG+", "VGPLUS"}: return "VG+"
+        if normalized.startswith("VG"): return "VG"
+        if normalized in {"G", "G+", "GOOD"}: return "GOOD"
+        return "UNKNOWN"
+
 
 class VinylmarktAdapter(PublicHtmlVinylAdapter):
     source, store_name = "vinylmarkt", "Vinylmarkt"

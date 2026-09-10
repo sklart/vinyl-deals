@@ -111,6 +111,15 @@ def test_maximum_vinyl_real_catalogue_fragment_has_stable_ids_and_isolated_cards
     assert adapter._page_url(2).endswith("?page=2")
 
 
+def test_maximum_vinyl_conditions_are_parsed_and_not_assumed_new():
+    adapter = MaximumVinylAdapter()
+    listing = adapter.parse_listing((FIXTURES / "maximum_vinyl" / "production_listing.html").read_text(encoding="utf-8"))[1]
+    detail = adapter.parse_product_page((FIXTURES / "maximum_vinyl" / "product_conditions.html").read_text(encoding="utf-8"), listing)
+    assert (detail.condition_media, detail.condition_sleeve) == ("VG+", "VG")
+    confirmed_new = adapter.parse_product_page('<li class="dotted-line"><div class="dotted-line_left"><span class="dotted-line_title">Состояние пластинки:</span></div><div class="dotted-line_right">NEW</div></li><li class="dotted-line"><div class="dotted-line_left"><span class="dotted-line_title">Состояние обложки:</span></div><div class="dotted-line_right">SEALED</div></li>', listing)
+    assert (confirmed_new.condition_media, confirmed_new.condition_sleeve) == ("NEW", "NEW")
+
+
 @pytest.mark.parametrize("name, expected", [
     ("Виниловая пластинка Opeth - Blackwater Park (LP)", True), ("Opeth - Blackwater Park (LP+CD)", True),
     ("Opeth - Blackwater Park Audio CD", False), ("Opeth vinyl sticker DVD", False), ("Кассета Opeth", False),
