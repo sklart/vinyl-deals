@@ -18,3 +18,18 @@ def test_enrichment_tolerates_a_card_without_description() -> None:
     listing = adapter.parse_listing(Path("tests/fixtures/imagine_club/listing.html").read_text(encoding="utf-8"))[0]
     detail = adapter.parse_product_page("", listing)
     assert detail.description is None
+
+
+def test_catalog_reports_current_page_and_remaining_work() -> None:
+    adapter = ImagineClubAdapter(page_limit=2, delay_seconds=0)
+    html = Path("tests/fixtures/imagine_club/listing.html").read_text(encoding="utf-8")
+    calls: list[str] = []
+    adapter._fetch = lambda url: html  # type: ignore[method-assign]
+    adapter.progress_callback = calls.append
+
+    adapter.get_catalog()
+
+    assert calls == [
+        "Imagine Club: страницы 1/2, осталось 1",
+        "Imagine Club: страницы 2/2, осталось 0",
+    ]

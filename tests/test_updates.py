@@ -19,9 +19,53 @@ class FailingAdapter:
         raise RuntimeError("offline")
 
 
+class ReportingAdapter(ActiveAdapter):
+    progress_callback = None
+
+    def get_catalog(self):
+        assert self.progress_callback is not None
+        self.progress_callback("Store: страницы 2/5, осталось 3")
+        return super().get_catalog()
+
+
+class FetchingAdapter(ActiveAdapter):
+    def _fetch(self, url):
+        return "catalogue"
+
+    def get_catalog(self):
+        self._fetch("https://example.test/catalogue")
+        return super().get_catalog()
+
+
 def test_refresh_continues_after_one_store_error(tmp_path):
     statuses = []
     result = refresh_catalogs(SQLiteRepository(tmp_path / "updates.sqlite3"), progress=statuses.append, adapter_factories={"bad": FailingAdapter, "good": ActiveAdapter}, enrich=False)
     assert [(item.source, item.status) for item in result] == [("bad", "error"), ("good", "active")]
     assert any("Магазин временно недоступен" in status for status in statuses)
     assert statuses[-1] == "Обновление завершено"
+
+
+def test_refresh_forwards_store_page_progress(tmp_path):
+    statuses = []
+
+    refresh_catalogs(
+        SQLiteRepository(tmp_path / "progress.sqlite3"),
+        progress=statuses.append,
+        adapter_factories={"reporting": ReportingAdapter},
+        enrich=False,
+    )
+
+    assert "Store: страницы 2/5, осталось 3" in statuses
+
+
+def test_refresh_reports_network_activity_for_adapter_without_page_total(tmp_path):
+    statuses = []
+
+    refresh_catalogs(
+        SQLiteRepository(tmp_path / "request-progress.sqlite3"),
+        progress=statuses.append,
+        adapter_factories={"fetching": FetchingAdapter},
+        enrich=False,
+    )
+
+    assert "fetching: запросов 1, осталось неизвестно" in statuses

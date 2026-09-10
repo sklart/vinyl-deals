@@ -21,6 +21,7 @@ from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
 
 class ImagineClubAdapter(BaseStoreAdapter):
     source = "imagine_club"
+    reports_catalog_progress = True
     catalog_url = "https://imagine-club.com/catalog"
     base_url = "https://imagine-club.com"
 
@@ -34,6 +35,7 @@ class ImagineClubAdapter(BaseStoreAdapter):
             pages = range(0, min(last_page + 1, self.page_limit) if self.page_limit is not None else last_page + 1)
             offers: list[RawOffer] = []
             for page in pages:
+                self._emit_page_progress(page + 1, len(pages))
                 html = first if page == 0 else self._fetch(f"{self.catalog_url}?page={page}")
                 offers.extend(self.parse_listing(html))
                 if page < last_page and self.delay_seconds:
@@ -111,6 +113,9 @@ class ImagineClubAdapter(BaseStoreAdapter):
         request = Request(url, headers={"User-Agent": "VinylDeals/0.1 (+local research)"})
         with urlopen(request, timeout=self.timeout_seconds) as response:  # nosec B310: fixed HTTPS origin
             return response.read().decode("utf-8")
+
+    def _emit_page_progress(self, current: int, total: int) -> None:
+        self.emit_progress(f"Imagine Club: страницы {current}/{total}, осталось {total - current}")
 
     @staticmethod
     def _last_page(html: str) -> int:

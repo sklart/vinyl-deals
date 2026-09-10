@@ -16,6 +16,7 @@ from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
 
 class CollectomaniaAdapter(BaseStoreAdapter):
     source = "collectomania"
+    reports_catalog_progress = True
     catalog_url = "https://collectomania.ru/collection/vinil"
     base_url = "https://collectomania.ru"
 
@@ -26,6 +27,7 @@ class CollectomaniaAdapter(BaseStoreAdapter):
         try:
             url, pages, offers = self.catalog_url, 0, []
             while url and (self.page_limit is None or pages < self.page_limit):
+                self.emit_progress(f"Collectomania: страницы {pages + 1}, осталось неизвестно")
                 html = self._fetch(url)
                 offers.extend(self.parse_listing(html))
                 pages += 1

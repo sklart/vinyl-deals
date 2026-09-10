@@ -64,6 +64,29 @@ def refresh_catalogs(repository: SQLiteRepository, *, progress: Callable[[str], 
     for source, factory in (adapter_factories or DEFAULT_ADAPTER_FACTORIES).items():
         emit(f"Обновление: {STORE_LABELS.get(source, source)}...")
         adapter = factory()
+        # Catalogue adapters may emit finer-grained, user-visible progress
+        # (for example, page X/Y).  The generic worker remains independent of
+        # each store's parser implementation.
+        if hasattr(adapter, "progress_callback"):
+            adapter.progress_callback = emit
+        # Older/single-page adapters do not know their final page count.  Keep
+        # the UI alive nonetheless: the request count proves that work is in
+        # progress and explicitly avoids inventing a remaining-page estimate.
+        if not getattr(adapter, "reports_catalog_progress", False):
+            fetch = getattr(adapter, "_fetch", None)
+            if callable(fetch):
+                request_count = 0
+
+                def reporting_fetch(url: str) -> str:
+                    nonlocal request_count
+                    request_count += 1
+                    emit(
+                        f"{STORE_LABELS.get(source, source)}: запросов "
+                        f"{request_count}, осталось неизвестно"
+                    )
+                    return fetch(url)
+
+                adapter._fetch = reporting_fetch
         run_id = repository.start_scrape_run(source)
         try:
             scrape = adapter.get_catalog()
@@ -76,6 +99,12 @@ def refresh_catalogs(repository: SQLiteRepository, *, progress: Callable[[str], 
             warnings = list(scrape.warnings)
             enriched = 0
             for index, offer in enumerate(scrape.offers):
+                if enrich:
+                    total = len(scrape.offers)
+                    emit(
+                        f"{STORE_LABELS.get(source, source)}: карточки "
+                        f"{index + 1}/{total}, осталось {total - index - 1}"
+                    )
                 persisted = offer
                 if enrich:
                     try:

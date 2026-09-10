@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 
 from vinyl_deals.domain import RawOffer, ScrapeResult
 
 
 class BaseStoreAdapter(ABC):
     source: str
+    # Set by refresh orchestration.  Adapters with a known page total report
+    # exact pagination; other public adapters still receive generic request
+    # progress from the orchestrator.
+    progress_callback: Callable[[str], None] | None = None
+    reports_catalog_progress = False
+
+    def emit_progress(self, message: str) -> None:
+        if self.progress_callback:
+            self.progress_callback(message)
 
     @abstractmethod
     def get_catalog(self) -> ScrapeResult:

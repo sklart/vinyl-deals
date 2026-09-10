@@ -32,6 +32,7 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
     catalog_url = ""
     catalog_urls: tuple[str, ...] = ()
     base_url = ""
+    reports_catalog_progress = True
 
     def __init__(self, *, timeout_seconds: float = 20.0, page_limit: int | None = None, delay_seconds: float = 0.25) -> None:
         self.timeout_seconds, self.page_limit, self.delay_seconds = timeout_seconds, page_limit, delay_seconds
@@ -45,6 +46,7 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
             count = min(pages, self.page_limit) if self.page_limit is not None else pages
             offers: list[RawOffer] = []
             for page in range(1, count + 1):
+                self.emit_progress(f"{self.store_name}: страницы {page}/{count}, осталось {count - page}")
                 html = first if page == 1 else self._fetch(self._page_url(page))
                 if self._is_blocked(html):
                     return ScrapeResult((), StoreState.DEGRADED, (f"{self.store_name} returned a CAPTCHA or access-check page; source paused.",), pages_processed=page - 1)
