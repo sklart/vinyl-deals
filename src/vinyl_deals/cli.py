@@ -3,22 +3,23 @@ import argparse
 from decimal import Decimal
 from time import sleep
 from pathlib import Path
-from vinyl_deals.adapters import CollectomaniaAdapter, ImagineClubAdapter, VinylRuAdapter
+from vinyl_deals.adapters import CollectomaniaAdapter, DroogRostovAdapter, ImagineClubAdapter, RioRostovAdapter, VinylRuAdapter
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.database.repository import ManualDecisionConflict, ReleaseMergeConflict
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="vinyl-deals"); commands = parser.add_subparsers(dest="command", required=True)
-    scrape = commands.add_parser("scrape", help="Fetch a public store catalogue"); scrape.add_argument("source", choices=["vinyl_ru", "imagine_club", "collectomania"]); scrape.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); scrape.add_argument("--page-limit", type=int, help="Temporary safe bound for a paginated source"); scrape.add_argument("--enrich", action="store_true", help="Fetch public product details for listed offers")
+    scrape = commands.add_parser("scrape", help="Fetch a public store catalogue"); scrape.add_argument("source", choices=["vinyl_ru", "imagine_club", "collectomania", "rio_rostov", "droog_rostov"]); scrape.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); scrape.add_argument("--page-limit", type=int, help="Temporary safe bound for a paginated source"); scrape.add_argument("--enrich", action="store_true", help="Fetch public product details for listed offers")
     match = commands.add_parser("match", help="Show pending possible release matches"); match.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); match.add_argument("--build", action="store_true", help="Build candidate pairs from persisted offers")
     decide = commands.add_parser("decide-match", help="Save a manual release-match decision"); decide.add_argument("offer_id", type=int); decide.add_argument("candidate_offer_id", type=int); decide.add_argument("decision", choices=["same_release", "different_release", "ignore"]); decide.add_argument("--note"); decide.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3"))
-    deals = commands.add_parser("deals", help="Evaluate matched release offers"); deals.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); deals.add_argument("--min-class", default="NORMAL", choices=["NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); deals.add_argument("--include-insufficient", action="store_true", help="Include historical-only signals with insufficient market data"); deals.add_argument("--limit", type=int, default=50); deals.add_argument("--release-id", type=int)
+    deals = commands.add_parser("deals", help="Evaluate matched release offers"); deals.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); deals.add_argument("--min-class", default="NORMAL", choices=["NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); deals.add_argument("--include-insufficient", action="store_true", help="Include historical-only signals with insufficient market data"); deals.add_argument("--limit", type=int, default=50); deals.add_argument("--release-id", type=int); deals.add_argument("--local", action="store_true", help="Show only local-store offers"); deals.add_argument("--city"); deals.add_argument("--pickup", action="store_true", help="Show only offers with confirmed pickup")
+    local = commands.add_parser("local", help="Show fresh local offers and transparent effective prices"); local.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); local.add_argument("--city", default="Ростов-на-Дону"); local.add_argument("--pickup", action="store_true"); local.add_argument("--limit", type=int, default=50)
     search = commands.add_parser("search", help="Search matched releases and their current offers"); search.add_argument("--database", type=Path, default=Path("vinyl_deals.sqlite3")); search.add_argument("--artist"); search.add_argument("--title"); search.add_argument("--barcode"); search.add_argument("--catalog"); search.add_argument("--label"); search.add_argument("--year", type=int); search.add_argument("--format")
     commands.add_parser("doctor", help="Check local configuration"); args = parser.parse_args()
     if args.command == "doctor":
         repository = SQLiteRepository()
         runs = repository.latest_scrape_runs()
-        adapters = "vinyl_ru, imagine_club, collectomania"
+        adapters = "vinyl_ru, imagine_club, collectomania, rio_rostov; droog_rostov (public profile only)"
         print(f"OK: SQLite schema v{repository.schema_version()}; adapters: {adapters}.")
         if runs:
             print("Latest scrape runs:")
@@ -44,6 +45,7 @@ def main() -> int:
         print(f"Saved {args.decision} for {args.offer_id} <-> {args.candidate_offer_id}.")
         return 0
     if args.command == "deals":
+        from vinyl_deals.effective_price import calculate_effective_price
         from vinyl_deals.pricing import DealClass, evaluate_deals
         rank = {DealClass.NORMAL: 0, DealClass.INTERESTING: 1, DealClass.GOOD: 2, DealClass.HOT: 3, DealClass.VERY_HOT: 4, DealClass.INSUFFICIENT: -1}
         minimum = rank[DealClass(args.min_class)]
@@ -53,12 +55,41 @@ def main() -> int:
                 return True
             return args.include_insufficient and item.deal_class == DealClass.INSUFFICIENT and (item.is_historical_low or (item.price_drop_pct is not None and item.price_drop_pct >= 10))
         results = [item for item in evaluate_deals(repository, args.release_id) if visible(item)]
+        if args.local or args.city or args.pickup:
+            def locality(item):
+                _, offer = repository.offer_by_id(item.offer_id)
+                return (not args.local or offer.local_store) and (not args.city or offer.city == args.city) and (not args.pickup or offer.pickup_available)
+            results = [item for item in results if locality(item)]
         results.sort(key=lambda item: (rank[item.deal_class], item.discount_pct or Decimal("-1")), reverse=True)
         for item in results[:args.limit]:
             _, offer = repository.offer_by_id(item.offer_id)
             heading = str(item.deal_class) if item.deal_class == DealClass.INSUFFICIENT else f"{item.deal_class} {item.discount_pct or Decimal('0'):.0f}%"
             market = "" if item.deal_class == DealClass.INSUFFICIENT else f"Market median: {item.market_median or '-'}\n"
-            print(f"{heading}\n\n{offer.artist_raw or '-'} — {offer.title_raw or '-'}\nRelease: {offer.label or '-'} / {offer.catalog_number_raw or '-'} / {offer.release_year or '-'}\nStore: {offer.source}\nPrice: {item.current_price} RUB\n{market}Comparisons: {item.comparable_count}\nHistorical min: {item.historical_min or '-'}\n90d median: {item.median_90d or '-'}\n90d minimum: {item.minimum_90d or '-'}\nPrevious price: {item.previous_price or '-'}\nPrice drop: {item.price_drop_pct or Decimal('0'):.0f}%\nHistorical low: {'YES' if item.is_historical_low else 'NO'}\nReasons: {', '.join(item.reasons)}\n{offer.url}\n")
+            effective = calculate_effective_price(offer)
+            effective_line = f"Effective price: {effective.total} RUB" if effective and effective.delivery_known else "Effective price: delivery cost unknown"
+            print(f"{heading}\n\n{offer.artist_raw or '-'} — {offer.title_raw or '-'}\nRelease: {offer.label or '-'} / {offer.catalog_number_raw or '-'} / {offer.release_year or '-'}\nStore: {offer.source}\nPrice: {item.current_price} RUB\n{effective_line}\n{market}Comparisons: {item.comparable_count}\nHistorical min: {item.historical_min or '-'}\n90d median: {item.median_90d or '-'}\n90d minimum: {item.minimum_90d or '-'}\nPrevious price: {item.previous_price or '-'}\nPrice drop: {item.price_drop_pct or Decimal('0'):.0f}%\nHistorical low: {'YES' if item.is_historical_low else 'NO'}\nReasons: {', '.join(item.reasons)}\n{offer.url}\n")
+        return 0
+    if args.command == "local":
+        from datetime import datetime, timedelta, timezone
+        from vinyl_deals.effective_price import calculate_effective_price
+        repository = SQLiteRepository(args.database)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        rows = []
+        for _, offer in repository.offers_for_matching():
+            if not (offer.local_store and offer.city == args.city and offer.availability.value == "in_stock" and offer.fetched_at >= cutoff):
+                continue
+            if args.pickup and not offer.pickup_available:
+                continue
+            effective = calculate_effective_price(offer)
+            if effective:
+                rows.append((effective.total, offer, effective))
+        rows.sort(key=lambda row: row[0])
+        if not rows:
+            print("No fresh local offers found.")
+            return 0
+        for _, offer, effective in rows[:args.limit]:
+            suffix = "самовывоз" if effective.is_pickup else ("доставка учтена" if effective.delivery_known else "доставка неизвестна")
+            print(f"{offer.artist_raw or '-'} — {offer.title_raw or '-'}\nStore: {offer.source}\nPrice: {offer.price} RUB\nEffective price: {effective.total} RUB ({suffix})\n{offer.url}\n")
         return 0
     if args.command == "search":
         from vinyl_deals.search import search_releases
@@ -82,7 +113,8 @@ def main() -> int:
                 print(f"\nDiscogs: {result.discogs_url}")
             print()
         return 0
-    adapter = {"vinyl_ru": VinylRuAdapter, "imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source]() if args.source == "vinyl_ru" else {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source](page_limit=args.page_limit)
+    factories = {"vinyl_ru": VinylRuAdapter, "rio_rostov": RioRostovAdapter, "droog_rostov": DroogRostovAdapter}
+    adapter = factories[args.source]() if args.source in factories else {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter}[args.source](page_limit=args.page_limit)
     repository = SQLiteRepository(args.database)
     run_id = repository.start_scrape_run(args.source)
     try:

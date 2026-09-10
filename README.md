@@ -11,14 +11,18 @@ vinyl-deals doctor
 vinyl-deals scrape vinyl_ru
 vinyl-deals scrape imagine_club --page-limit 1 --enrich
 vinyl-deals scrape collectomania --page-limit 1 --enrich
+vinyl-deals scrape rio_rostov --enrich
 vinyl-deals match --build
 vinyl-deals deals --min-class GOOD --limit 50
+vinyl-deals deals --local --city "Ростов-на-Дону" --pickup
+vinyl-deals local --city "Ростов-на-Дону" --pickup
 vinyl-deals search --artist "Opeth" --title "Blackwater Park"
 vinyl-deals-gui
 vinyl-deals decide-match 12 47 different_release --note "different pressing"
 ```
 
-Реализованы Vinyl.ru, Imagine Club и Collectomania. `--enrich` читает только
+Реализованы Vinyl.ru, Imagine Club, Collectomania и открытый каталог РИО
+(Ростов-на-Дону). `--enrich` читает только
 публичные карточки и отключён по умолчанию. При 403/429 источник помечается
 как временно недоступный; обхода защиты нет.
 
@@ -35,6 +39,20 @@ vinyl-deals decide-match 12 47 different_release --note "different pressing"
 карточек.
 
 Telegram, Web UI и новые магазины пока намеренно не реализованы.
+
+## Локальные магазины и effective price
+
+У предложений РИО указаны город, локальный магазин и доступность самовывоза.
+Для самовывоза `effective price` равен цене товара. Если для доставки нет
+публично подтверждённого тарифа, он не подставляется как ноль: вывод честно
+помечает стоимость доставки как неизвестную. В расчёт также могут входить
+только безусловные скидки; перечёркнутая `old_price` не является скидкой.
+
+«Друг» зарегистрирован как локальный источник с официальным публичным
+профилем, но автоматический импорт его товаров отключён: открытая среда не
+даёт безопасно прочитать VK-витрину, а данные каталогов-агрегаторов проект не
+использует. Поэтому команда `scrape droog_rostov` завершится статусом
+`DEGRADED`, не создавая вымышленных предложений.
 
 Phase 3 добавляет консервативную оценку выгодности для сопоставленных
 релизов: рыночная медиана использует только свежие (по умолчанию не старше

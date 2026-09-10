@@ -55,6 +55,10 @@ class RawOffer:
     local_store: bool = False
     pickup_available: bool = False
     delivery_available: bool = True
+    # Delivery is intentionally nullable: an unknown tariff must never be
+    # silently presented as a zero-cost delivery.
+    delivery_cost: Decimal | None = None
+    unconditional_discount: Decimal | None = None
     condition_media: str | None = None
     condition_sleeve: str | None = None
     format: str | None = None

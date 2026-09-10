@@ -30,6 +30,8 @@ def _serialize_offer(offer: RawOffer) -> str:
     payload["fetched_at"] = offer.fetched_at.isoformat()
     payload["price"] = str(offer.price) if offer.price is not None else None
     payload["old_price"] = str(offer.old_price) if offer.old_price is not None else None
+    payload["delivery_cost"] = str(offer.delivery_cost) if offer.delivery_cost is not None else None
+    payload["unconditional_discount"] = str(offer.unconditional_discount) if offer.unconditional_discount is not None else None
     payload["availability"] = offer.availability.value
     return json.dumps(payload, ensure_ascii=False)
 
@@ -38,6 +40,8 @@ def _deserialize_offer(payload: str) -> RawOffer:
     data["fetched_at"] = datetime.fromisoformat(data["fetched_at"])
     data["price"] = Decimal(data["price"]) if data["price"] is not None else None
     data["old_price"] = Decimal(data["old_price"]) if data["old_price"] is not None else None
+    data["delivery_cost"] = Decimal(data["delivery_cost"]) if data.get("delivery_cost") is not None else None
+    data["unconditional_discount"] = Decimal(data["unconditional_discount"]) if data.get("unconditional_discount") is not None else None
     data["availability"] = Availability(data["availability"])
     data["edition_tags"] = tuple(data["edition_tags"])
     return RawOffer(**data)
