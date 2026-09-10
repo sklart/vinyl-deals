@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from time import sleep
 from typing import Callable
 
-from vinyl_deals.adapters import CollectomaniaAdapter, ImagineClubAdapter, RioRostovAdapter, VinylRuAdapter
+from vinyl_deals.adapters import AudiomaniaAdapter, CollectomaniaAdapter, DrHeadAdapter, ImagineClubAdapter, RespublicaAdapter, RioRostovAdapter, VinylRuAdapter
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.matching.service import build_match_queue
 
@@ -24,12 +24,18 @@ DEFAULT_ADAPTER_FACTORIES = {
     "collectomania": CollectomaniaAdapter,
     "vinyl_ru": VinylRuAdapter,
     "rio_rostov": RioRostovAdapter,
+    "respublica": RespublicaAdapter,
+    "drhead": DrHeadAdapter,
+    "audiomania": AudiomaniaAdapter,
 }
 STORE_LABELS = {
     "imagine_club": "Imagine Club",
     "collectomania": "Collectomania",
     "vinyl_ru": "Vinyl.ru",
     "rio_rostov": "РИО",
+    "respublica": "Respublica",
+    "drhead": "Dr.Head",
+    "audiomania": "Audiomania",
 }
 
 

@@ -12,6 +12,9 @@ vinyl-deals scrape vinyl_ru
 vinyl-deals scrape imagine_club --page-limit 1 --enrich
 vinyl-deals scrape collectomania --page-limit 1 --enrich
 vinyl-deals scrape rio_rostov --enrich
+vinyl-deals scrape respublica --page-limit 1 --enrich
+vinyl-deals scrape drhead --page-limit 1 --enrich
+vinyl-deals scrape audiomania
 vinyl-deals match --build
 vinyl-deals deals --min-class GOOD --limit 50
 vinyl-deals deals --local --city "Ростов-на-Дону" --pickup
@@ -21,8 +24,8 @@ vinyl-deals-gui
 vinyl-deals decide-match 12 47 different_release --note "different pressing"
 ```
 
-Реализованы Vinyl.ru, Imagine Club, Collectomania и открытый каталог РИО
-(Ростов-на-Дону). `--enrich` читает только
+Реализованы Vinyl.ru, Imagine Club, Collectomania, открытый каталог РИО
+(Ростов-на-Дону), Respublica и Dr.Head. `--enrich` читает только
 публичные карточки и отключён по умолчанию. При 403/429 источник помечается
 как временно недоступный; обхода защиты нет.
 
@@ -56,6 +59,17 @@ Telegram, Web UI и новые магазины пока намеренно не
 даёт безопасно прочитать VK-витрину, а данные каталогов-агрегаторов проект не
 использует. Поэтому команда `scrape droog_rostov` завершится статусом
 `DEGRADED`, не создавая вымышленных предложений.
+
+## Первая волна новых магазинов
+
+Respublica использует публичный server-rendered каталог; Dr.Head — открытые
+данные карточек публичного каталога. Audiomania подключена через стандартный
+JSON-LD adapter, однако с текущего сетевого окружения её сайт сбрасывает
+публичное соединение. В таком случае источник корректно получает статус
+`DEGRADED` и не мешает обновлению остальных магазинов. CAPTCHA, авторизация и
+антибот-защита никогда не обходятся. Все три источника используют стабильный
+идентификатор товара магазина, поэтому изменение цены или остатка обновляет
+тот же offer.
 
 Phase 3 добавляет консервативную оценку выгодности для сопоставленных
 релизов: рыночная медиана использует только свежие (по умолчанию не старше
