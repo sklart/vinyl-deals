@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from time import sleep
 from typing import Callable
 
-from vinyl_deals.adapters import AudiomaniaAdapter, CollectomaniaAdapter, DrHeadAdapter, ImagineClubAdapter, RespublicaAdapter, RioRostovAdapter, VinylRuAdapter
+from vinyl_deals.adapters import AVSoundAdapter, AudiomaniaAdapter, CollectomaniaAdapter, DrHeadAdapter, ImagineClubAdapter, MaximumVinylAdapter, PultAdapter, RespublicaAdapter, RioRostovAdapter, TishinaAdapter, VernoshopAdapter, VidikaAdapter, VinylmarktAdapter, VinylRuAdapter
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.matching.service import build_match_queue
 
@@ -28,6 +28,13 @@ DEFAULT_ADAPTER_FACTORIES = {
     "respublica": RespublicaAdapter,
     "drhead": DrHeadAdapter,
     "audiomania": AudiomaniaAdapter,
+    "vidika": VidikaAdapter,
+    "maximum_vinyl": MaximumVinylAdapter,
+    "vinylmarkt": VinylmarktAdapter,
+    "vernoshop": VernoshopAdapter,
+    "tishina": TishinaAdapter,
+    "avsound": AVSoundAdapter,
+    "pult": PultAdapter,
 }
 STORE_LABELS = {
     "imagine_club": "Imagine Club",
@@ -37,6 +44,13 @@ STORE_LABELS = {
     "respublica": "Respublica",
     "drhead": "Dr.Head",
     "audiomania": "Audiomania",
+    "vidika": "Vidika",
+    "maximum_vinyl": "Maximum Vinyl",
+    "vinylmarkt": "Vinylmarkt",
+    "vernoshop": "Vernoshop",
+    "tishina": "Тишина",
+    "avsound": "AVSound",
+    "pult": "Pult.ru (публичный каталог ограничен)",
 }
 logger = logging.getLogger("vinyl_deals.scraping")
 

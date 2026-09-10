@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from vinyl_deals import cli
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.domain import RawOffer, ScrapeResult
@@ -60,6 +62,18 @@ def test_scrape_passes_page_limit_to_drhead(tmp_path, monkeypatch, capsys):
 def test_scrape_passes_page_limit_to_audiomania(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "AudiomaniaAdapter", _PageLimitedAdapter)
     monkeypatch.setattr("sys.argv", ["vinyl-deals", "scrape", "audiomania", "--page-limit", "1", "--database", str(tmp_path / "offers.sqlite3")])
+    assert cli.main() == 0
+    assert _PageLimitedAdapter.received_page_limit == 1
+
+
+@pytest.mark.parametrize("source, adapter_name", [
+    ("vidika", "VidikaAdapter"), ("maximum_vinyl", "MaximumVinylAdapter"),
+    ("vinylmarkt", "VinylmarktAdapter"), ("vernoshop", "VernoshopAdapter"),
+    ("tishina", "TishinaAdapter"), ("avsound", "AVSoundAdapter"), ("pult", "PultAdapter"),
+])
+def test_scrape_passes_page_limit_to_wave2_adapters(tmp_path, monkeypatch, capsys, source, adapter_name):
+    monkeypatch.setattr(cli, adapter_name, _PageLimitedAdapter)
+    monkeypatch.setattr("sys.argv", ["vinyl-deals", "scrape", source, "--page-limit", "1", "--database", str(tmp_path / "offers.sqlite3")])
     assert cli.main() == 0
     assert _PageLimitedAdapter.received_page_limit == 1
 
