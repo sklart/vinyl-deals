@@ -234,19 +234,39 @@ class SQLiteRepository:
         self.initialize()
         where = "WHERE sent_at IS NULL" if unsent_only else ""
         with self._connect() as connection:
-            rows = connection.execute(f"SELECT id,release_id,offer_id,event_type,event_key,payload_json,created_at,sent_at,send_error FROM alerts {where} ORDER BY id").fetchall()
-        keys = ("id", "release_id", "offer_id", "event_type", "event_key", "payload_json", "created_at", "sent_at", "send_error")
+            rows = connection.execute(f"SELECT id,release_id,offer_id,event_type,event_key,payload_json,created_at,sent_at,send_error,delivery_claimed_at FROM alerts {where} ORDER BY id").fetchall()
+        keys = ("id", "release_id", "offer_id", "event_type", "event_key", "payload_json", "created_at", "sent_at", "send_error", "delivery_claimed_at")
         return [{**dict(zip(keys, row, strict=True)), "payload": json.loads(row[5])} for row in rows]
+
+    def claim_pending_alerts(self) -> list[dict[str, object]]:
+        """Atomically reserve unsent alerts for one delivery worker.
+
+        A claim is persisted so a manual GUI send, scheduler and CLI process
+        cannot send the same alert concurrently.  Old claims are reclaimed
+        after a process crash.
+        """
+        self.initialize()
+        now = datetime.now(timezone.utc)
+        expired = (now - timedelta(minutes=10)).isoformat()
+        claimed_at = now.isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("UPDATE alerts SET delivery_claimed_at=NULL WHERE sent_at IS NULL AND delivery_claimed_at < ?", (expired,))
+            rows = connection.execute("SELECT id,release_id,offer_id,event_type,event_key,payload_json,created_at,sent_at,send_error,delivery_claimed_at FROM alerts WHERE sent_at IS NULL AND delivery_claimed_at IS NULL ORDER BY id").fetchall()
+            if rows:
+                connection.executemany("UPDATE alerts SET delivery_claimed_at=? WHERE id=? AND delivery_claimed_at IS NULL AND sent_at IS NULL", [(claimed_at, row[0]) for row in rows])
+        keys = ("id", "release_id", "offer_id", "event_type", "event_key", "payload_json", "created_at", "sent_at", "send_error", "delivery_claimed_at")
+        return [{**dict(zip(keys, row, strict=True)), "payload": json.loads(row[5]), "delivery_claimed_at": claimed_at} for row in rows]
 
     def mark_alert_sent(self, alert_id: int) -> None:
         self.initialize()
         with self._connect() as connection:
-            connection.execute("UPDATE alerts SET sent_at=?, send_error=NULL WHERE id=?", (_utc_now(), alert_id))
+            connection.execute("UPDATE alerts SET sent_at=?, send_error=NULL, delivery_claimed_at=NULL WHERE id=?", (_utc_now(), alert_id))
 
     def mark_alert_error(self, alert_id: int, error: str) -> None:
         self.initialize()
         with self._connect() as connection:
-            connection.execute("UPDATE alerts SET send_error=? WHERE id=?", (error[:500], alert_id))
+            connection.execute("UPDATE alerts SET send_error=?, delivery_claimed_at=NULL WHERE id=?", (error[:500], alert_id))
 
     def offers_for_release(self, release_id: int) -> list[tuple[int, RawOffer]]:
         """Return persisted offers for one Release without pricing policy."""

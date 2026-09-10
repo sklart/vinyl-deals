@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-CURRENT_VERSION = 3
+CURRENT_VERSION = 4
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS raw_products (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_product_id TEXT NOT NULL, fetched_at TEXT NOT NULL, payload_json TEXT NOT NULL, UNIQUE(source, source_product_id));
@@ -131,6 +131,12 @@ def migrate_v3(connection: sqlite3.Connection) -> None:
     """)
 
 
+def migrate_v4(connection: sqlite3.Connection) -> None:
+    if "delivery_claimed_at" not in _columns(connection, "alerts"):
+        connection.execute("ALTER TABLE alerts ADD COLUMN delivery_claimed_at TEXT")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_alerts_delivery_claim ON alerts(sent_at, delivery_claimed_at, id)")
+
+
 def migrate(connection: sqlite3.Connection) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version > CURRENT_VERSION:
@@ -146,3 +152,7 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 3:
         migrate_v3(connection)
         connection.execute("PRAGMA user_version = 3")
+        version = 3
+    if version < 4:
+        migrate_v4(connection)
+        connection.execute("PRAGMA user_version = 4")

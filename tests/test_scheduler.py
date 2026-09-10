@@ -1,5 +1,6 @@
 import os
 from threading import Event
+from threading import Timer
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -53,3 +54,21 @@ def test_scheduler_does_not_run_two_cycles_at_once(qapp, tmp_path):
     unblock.set()
     assert wait_until(qapp, lambda: not scheduler.running)
     scheduler.shutdown()
+
+
+def test_scheduler_shutdown_waits_for_active_worker(qapp, tmp_path):
+    started, unblock = Event(), Event()
+
+    def refresh(*_args, **_kwargs):
+        started.set()
+        unblock.wait(1)
+        return ()
+
+    scheduler = Scheduler(SQLiteRepository(tmp_path / "shutdown.sqlite3"), refresh_service=refresh)
+    assert scheduler.trigger()
+    assert wait_until(qapp, started.is_set)
+    worker = scheduler.worker
+    Timer(0.05, unblock.set).start()
+    scheduler.shutdown()
+    assert worker is not None and not worker.isRunning()
+    assert not scheduler.timer.isActive()

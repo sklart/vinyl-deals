@@ -49,7 +49,8 @@ def main() -> int:
         print(f"Release {args.release_id} {'enabled' if args.watch_command == 'enable' else 'disabled'}."); return 0
     if args.command == "alerts":
         from vinyl_deals.alerts import evaluate_watchlist
-        from vinyl_deals.notifications import TelegramNotifier, format_alert
+        from vinyl_deals.alert_delivery import deliver_pending_alerts
+        from vinyl_deals.notifications import TelegramNotifier
         repository = SQLiteRepository(args.database)
         if args.alert_command == "check":
             candidates = evaluate_watchlist(repository)
@@ -63,18 +64,8 @@ def main() -> int:
         notifier = TelegramNotifier()
         if not notifier.configured:
             print("Telegram is not configured: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID."); return 2
-        sent_now = failed_now = 0
-        for row in repository.alerts(unsent_only=True):
-            try:
-                notifier.send(format_alert(row["payload"]))
-                repository.mark_alert_sent(int(row["id"]))
-                sent_now += 1
-            except Exception as error:
-                # Transport errors and malformed third-party payloads are
-                # isolated per alert; never persist exception text because it
-                # may contain secrets from a provider response.
-                repository.mark_alert_error(int(row["id"]), f"delivery failed: {type(error).__name__}")
-                failed_now += 1
+        result = deliver_pending_alerts(repository)
+        sent_now, failed_now = result.sent, result.failed
         print(f"Telegram sent: {sent_now}, failed: {failed_now}")
         return 1 if failed_now else 0
     if args.command == "match":

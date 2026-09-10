@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from threading import Thread
 import pytest
 
 from vinyl_deals.alerts import AlertEvent, _meets_deal_threshold, evaluate_watchlist
@@ -8,6 +9,7 @@ from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.domain import Availability, RawOffer
 from vinyl_deals.matching.service import build_match_queue
 from vinyl_deals.notifications import TelegramNotifier, format_alert
+from vinyl_deals.alert_delivery import deliver_pending_alerts
 
 
 def _repository(tmp_path, *, price="5000", local=False, delivery=None, pickup=False, fetched_at=None):
@@ -113,6 +115,26 @@ def test_formatter_accepts_json_number_strings():
     payload = {"event_type": "GOOD_DEAL", "artist": "Opeth", "title": "Blackwater Park", "store": "store", "price": "5490", "market_median": "7200", "effective_price": "5700", "effective_price_known": True, "discount_pct": "23.75", "url": "https://example.test"}
     text = format_alert(payload)
     assert "Цена: 5490 ₽" in text and "Выгода: 24%" in text
+
+
+def test_atomic_delivery_claim_prevents_duplicate_send(tmp_path):
+    repository, release_id = _repository(tmp_path)
+    offer_id = repository.offers_for_release(release_id)[0][0]
+    repository.save_alert(release_id=release_id, offer_id=offer_id, event_type="NEW_STOCK", event_key="atomic", payload={"event_type": "NEW_STOCK", "artist": "Opeth", "title": "Blackwater Park", "store": "store", "price": "5000", "url": "https://example.test"})
+    sent: list[str] = []
+
+    class Notifier:
+        configured = True
+        def send(self, text):
+            sent.append(text)
+
+    threads = [Thread(target=lambda: deliver_pending_alerts(repository, notifier_factory=lambda: Notifier())) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(sent) == 1
+    assert repository.alerts()[0]["sent_at"] is not None
 
 
 def test_alert_send_isolates_formatter_failure_and_counts_current_run(tmp_path, monkeypatch, capsys):

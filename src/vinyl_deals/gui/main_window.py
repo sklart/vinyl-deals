@@ -48,9 +48,12 @@ class MainWindow(QMainWindow):
         self.results: list[ReleaseSearchResult] = []
         self.selected_result: ReleaseSearchResult | None = None
         self._worker: UpdateWorker | None = None
+        self._alert_worker: TaskWorker | None = None
         self._search_performed = False
         self._updating = False
+        self._closing = False
         self.scheduler = scheduler_factory(self.repository, refresh_service=update_service, parent=self)
+        self.scheduler.start_guard = self._scheduler_start_allowed
         self.setWindowTitle("Vinyl Deals Russia")
         self._build_ui()
         self._restore_window_state()
@@ -260,25 +263,55 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"Следующая проверка: через {interval} мин.")
 
     def run_scheduler_cycle(self) -> None:
-        if not self._updating and self.scheduler.trigger(): self.status_label.setText("Обновление...")
+        if self._scheduler_start_allowed() and self.scheduler.trigger(): self.status_label.setText("Обновление...")
 
     def _scheduler_completed(self, result: object) -> None:
-        count = result.get("alerts", 0) if isinstance(result, dict) else 0; self.status_label.setText(f"Новых alerts: {count}"); self.refresh_tracking()
+        count = result.get("alerts", 0) if isinstance(result, dict) else 0
+        status = f"Новых alerts: {count}"
+        if self.scheduler.enabled:
+            status += f". Следующая проверка: через {self.scheduler.interval_minutes} мин."
+        self.status_label.setText(status); self.refresh_tracking()
         if self._search_performed:
             self.perform_search()
 
     def send_pending_alerts(self) -> None:
-        from vinyl_deals.notifications import TelegramNotifier, format_alert
-        if hasattr(self, "_alert_worker") and self._alert_worker and self._alert_worker.isRunning(): return
+        from vinyl_deals.alert_delivery import deliver_pending_alerts
+        if not self._alert_send_allowed():
+            return
         def send() -> int:
-            notifier = TelegramNotifier()
-            if not notifier.configured: raise RuntimeError("Telegram не настроен")
-            sent = 0
-            for row in self.repository.alerts(unsent_only=True):
-                try: notifier.send(format_alert(row["payload"])); self.repository.mark_alert_sent(int(row["id"])); sent += 1
-                except Exception as error: self.repository.mark_alert_error(int(row["id"]), f"delivery failed: {type(error).__name__}")
-            return sent
-        self._alert_worker = TaskWorker(send); self._alert_worker.completed.connect(lambda count: (self.status_label.setText(f"Telegram sent: {count}"), self.refresh_tracking())); self._alert_worker.failed.connect(lambda message: self.status_label.setText(f"Ошибка Telegram: {message}")); self._alert_worker.finished.connect(lambda: self._alert_worker.deleteLater()); self._alert_worker.start()
+            return deliver_pending_alerts(self.repository)
+        self._set_updating(True)
+        self._alert_worker = TaskWorker(send)
+        self._alert_worker.completed.connect(self._alert_delivery_completed)
+        self._alert_worker.failed.connect(lambda message: self.status_label.setText(f"Ошибка Telegram: {message}"))
+        self._alert_worker.finished.connect(self._alert_delivery_finished)
+        self._alert_worker.start()
+
+    def _alert_delivery_completed(self, result: object) -> None:
+        sent = getattr(result, "sent", 0); failed = getattr(result, "failed", 0)
+        self.status_label.setText(f"Telegram sent: {sent}, failed: {failed}")
+        self.refresh_tracking()
+
+    def _alert_delivery_finished(self) -> None:
+        worker = self._alert_worker
+        self._alert_worker = None
+        if worker:
+            worker.deleteLater()
+        self._set_updating(False)
+
+    def _maintenance_busy(self) -> bool:
+        return bool(
+            self._closing
+            or (self._worker and self._worker.isRunning())
+            or self.scheduler.running
+            or (self._alert_worker and self._alert_worker.isRunning())
+        )
+
+    def _scheduler_start_allowed(self) -> bool:
+        return not self._closing and not (self._worker and self._worker.isRunning()) and not (self._alert_worker and self._alert_worker.isRunning())
+
+    def _alert_send_allowed(self) -> bool:
+        return not self._maintenance_busy()
 
     def _restore_window_state(self) -> None:
         geometry = QSettings("VinylDeals", "Desktop").value("window/geometry")
@@ -289,12 +322,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         QSettings("VinylDeals", "Desktop").setValue("window/geometry", self.saveGeometry())
+        self._closing = True
         self.scheduler.shutdown()
         if self._worker and self._worker.isRunning():
-            self._worker.wait(3000)
-        worker = getattr(self, "_alert_worker", None)
+            self._worker.wait()
+        worker = self._alert_worker
         if worker and worker.isRunning():
-            worker.wait(3000)
+            worker.wait()
         super().closeEvent(event)
 
     def _criteria(self) -> dict[str, object] | None:
@@ -395,7 +429,7 @@ class MainWindow(QMainWindow):
         if updating and self.scheduler.timer.isActive():
             self.scheduler.timer.stop()
             self._resume_scheduler_timer = True
-        elif not updating and getattr(self, "_resume_scheduler_timer", False):
+        elif not updating and getattr(self, "_resume_scheduler_timer", False) and not self._closing and not self.scheduler.shutting_down:
             self.scheduler.timer.start(self.scheduler.interval_minutes * 60_000)
             self._resume_scheduler_timer = False
         for field in self.fields.values():
@@ -416,7 +450,7 @@ class MainWindow(QMainWindow):
             self.url_opener(QUrl(self.selected_result.discogs_url))
 
     def start_refresh(self) -> None:
-        if (self._worker and self._worker.isRunning()) or self.scheduler.running:
+        if self._maintenance_busy():
             return
         self._set_updating(True)
         self.status_label.setText("Обновление данных...")

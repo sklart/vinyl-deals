@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal
-from threading import Event
+from threading import Event, Timer
 
 from PySide6.QtCore import QSettings
 from PySide6.QtTest import QTest
@@ -101,4 +101,152 @@ def test_scheduler_cycle_keeps_gui_controls_disabled_until_finished(qapp, tmp_pa
         QTest.qWait(10)
     assert window.search_button.isEnabled()
     assert window.scheduler_run_button.isEnabled()
+    window.close()
+
+
+def test_close_waits_for_active_manual_refresh_worker(qapp, tmp_path):
+    settings = QSettings("VinylDeals", "Desktop")
+    settings.remove("scheduler")
+    started, unblock = Event(), Event()
+
+    def refresh(*_args, **_kwargs):
+        started.set()
+        unblock.wait(1)
+        return ()
+
+    window = MainWindow(tmp_path / "close-refresh.sqlite3", update_service=refresh)
+    window.start_refresh()
+    for _ in range(50):
+        qapp.processEvents()
+        if started.is_set():
+            break
+        QTest.qWait(10)
+    worker = window._worker
+    Timer(0.05, unblock.set).start()
+    window.close()
+    assert worker is not None and not worker.isRunning()
+
+
+def test_scheduler_and_manual_send_are_mutually_exclusive(qapp, tmp_path, monkeypatch):
+    settings = QSettings("VinylDeals", "Desktop")
+    settings.remove("scheduler")
+    started, unblock = Event(), Event()
+
+    class Result:
+        sent = 0
+        failed = 0
+
+    def slow_delivery(_repository):
+        started.set()
+        unblock.wait(1)
+        return Result()
+
+    monkeypatch.setattr("vinyl_deals.alert_delivery.deliver_pending_alerts", slow_delivery)
+    window = MainWindow(tmp_path / "exclusive.sqlite3", update_service=lambda *_args, **_kwargs: ())
+    window.send_pending_alerts()
+    for _ in range(50):
+        qapp.processEvents()
+        if started.is_set():
+            break
+        QTest.qWait(10)
+    assert started.is_set()
+    window.run_scheduler_cycle()
+    assert not window.scheduler.running
+    unblock.set()
+    for _ in range(50):
+        qapp.processEvents()
+        if window._alert_worker is None:
+            break
+        QTest.qWait(10)
+    window.run_scheduler_cycle()
+    assert window.scheduler.running
+    window.scheduler.shutdown()
+    window.close()
+
+
+def test_scheduler_cycle_blocks_manual_send_and_displays_next_check(qapp, tmp_path, monkeypatch):
+    settings = QSettings("VinylDeals", "Desktop")
+    settings.remove("scheduler")
+    started, unblock = Event(), Event()
+
+    def refresh(*_args, **_kwargs):
+        started.set()
+        unblock.wait(1)
+        return ()
+
+    window = MainWindow(tmp_path / "exclusive-cycle.sqlite3", update_service=refresh)
+    window.scheduler_enabled.setChecked(True)
+    window.scheduler_interval.setCurrentText("30")
+    window.run_scheduler_cycle()
+    for _ in range(50):
+        qapp.processEvents()
+        if started.is_set():
+            break
+        QTest.qWait(10)
+    window.send_pending_alerts()
+    assert window._alert_worker is None
+    unblock.set()
+    for _ in range(50):
+        qapp.processEvents()
+        if not window.scheduler.running and "Следующая проверка: через 30 мин." in window.status_label.text():
+            break
+        QTest.qWait(10)
+    assert "Следующая проверка: через 30 мин." in window.status_label.text()
+    assert window.scheduler.timer.isActive()
+    window.close()
+
+
+def test_close_waits_for_active_telegram_worker(qapp, tmp_path, monkeypatch):
+    settings = QSettings("VinylDeals", "Desktop")
+    settings.remove("scheduler")
+    started, unblock = Event(), Event()
+
+    class Result:
+        sent = 0
+        failed = 0
+
+    def slow_delivery(_repository):
+        started.set()
+        unblock.wait(1)
+        return Result()
+
+    monkeypatch.setattr("vinyl_deals.alert_delivery.deliver_pending_alerts", slow_delivery)
+    window = MainWindow(tmp_path / "close-telegram.sqlite3")
+    window.send_pending_alerts()
+    for _ in range(50):
+        qapp.processEvents()
+        if started.is_set():
+            break
+        QTest.qWait(10)
+    worker = window._alert_worker
+    Timer(0.05, unblock.set).start()
+    window.close()
+    assert worker is not None and not worker.isRunning()
+
+
+def test_manual_refresh_blocks_scheduler_cycle(qapp, tmp_path):
+    settings = QSettings("VinylDeals", "Desktop")
+    settings.remove("scheduler")
+    started, unblock = Event(), Event()
+
+    def refresh(*_args, **_kwargs):
+        started.set()
+        unblock.wait(1)
+        return ()
+
+    window = MainWindow(tmp_path / "refresh-exclusive.sqlite3", update_service=refresh)
+    window.start_refresh()
+    for _ in range(50):
+        qapp.processEvents()
+        if started.is_set():
+            break
+        QTest.qWait(10)
+    window.run_scheduler_cycle()
+    assert not window.scheduler.running
+    unblock.set()
+    for _ in range(50):
+        qapp.processEvents()
+        if window.refresh_button.isEnabled():
+            break
+        QTest.qWait(10)
     window.close()
