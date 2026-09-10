@@ -63,15 +63,20 @@ def main() -> int:
         notifier = TelegramNotifier()
         if not notifier.configured:
             print("Telegram is not configured: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID."); return 2
-        failed = 0
+        sent_now = failed_now = 0
         for row in repository.alerts(unsent_only=True):
             try:
                 notifier.send(format_alert(row["payload"]))
                 repository.mark_alert_sent(int(row["id"]))
-            except RuntimeError as error:
-                repository.mark_alert_error(int(row["id"]), str(error)); failed += 1
-        print(f"Telegram sent: {len(repository.alerts()) - len(repository.alerts(unsent_only=True))}, failed: {failed}")
-        return 1 if failed else 0
+                sent_now += 1
+            except Exception as error:
+                # Transport errors and malformed third-party payloads are
+                # isolated per alert; never persist exception text because it
+                # may contain secrets from a provider response.
+                repository.mark_alert_error(int(row["id"]), f"delivery failed: {type(error).__name__}")
+                failed_now += 1
+        print(f"Telegram sent: {sent_now}, failed: {failed_now}")
+        return 1 if failed_now else 0
     if args.command == "match":
         repository = SQLiteRepository(args.database)
         if args.build:

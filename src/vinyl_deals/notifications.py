@@ -3,9 +3,24 @@ from __future__ import annotations
 
 import json
 import os
+from decimal import Decimal, InvalidOperation
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+
+def _number(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _display(value: object) -> str:
+    number = _number(value)
+    return str(number) if number is not None else str(value)
 
 
 def format_alert(payload: dict[str, object]) -> str:
@@ -14,10 +29,11 @@ def format_alert(payload: dict[str, object]) -> str:
     metadata = " / ".join(str(value) for value in (payload.get("label"), payload.get("catalog_number"), payload.get("release_year")) if value)
     if metadata: lines.extend([metadata, ""])
     if payload.get("local_store"): lines.append("📍 РОСТОВ" if payload.get("city") == "Ростов-на-Дону" else "📍 ЛОКАЛЬНЫЙ МАГАЗИН")
-    lines.extend([f"Магазин: {payload['store']}", f"Цена: {payload['price']} ₽"])
-    if payload.get("effective_price_known"): lines.append(f"Итоговая цена: {payload['effective_price']} ₽")
-    if payload.get("market_median") is not None: lines.append(f"Рынок: {payload['market_median']} ₽")
-    if payload.get("discount_pct") is not None: lines.append(f"Выгода: {payload['discount_pct']:.0f}%")
+    lines.extend([f"Магазин: {payload['store']}", f"Цена: {_display(payload['price'])} ₽"])
+    if payload.get("effective_price_known"): lines.append(f"Итоговая цена: {_display(payload['effective_price'])} ₽")
+    if payload.get("market_median") is not None: lines.append(f"Рынок: {_display(payload['market_median'])} ₽")
+    discount = _number(payload.get("discount_pct"))
+    if discount is not None: lines.append(f"Выгода: {discount:.0f}%")
     lines.extend(["", str(payload["url"])])
     if payload.get("discogs_url"): lines.append(f"Discogs: {payload['discogs_url']}")
     return "\n".join(lines)

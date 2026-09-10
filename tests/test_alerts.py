@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from vinyl_deals.alerts import AlertEvent, evaluate_watchlist
+from vinyl_deals import cli
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.domain import Availability, RawOffer
 from vinyl_deals.matching.service import build_match_queue
@@ -65,6 +66,8 @@ def test_good_deal_uses_existing_pricing_engine(tmp_path):
     repository.add_watchlist(release_id, min_deal_class="GOOD")
     events = evaluate_watchlist(repository)
     assert any(item.event_type == AlertEvent.GOOD_DEAL for item in events)
+    persisted = next(row["payload"] for row in repository.alerts() if row["event_type"] == AlertEvent.GOOD_DEAL)
+    assert "Выгода:" in format_alert(persisted)
 
 
 def test_unknown_local_delivery_does_not_pass_max_price(tmp_path):
@@ -92,3 +95,48 @@ def test_formatter_and_telegram_network_failure_preserve_alert(tmp_path, monkeyp
     alert_id = int(repository.alerts(unsent_only=True)[0]["id"])
     repository.mark_alert_error(alert_id, "offline")
     assert repository.alerts(unsent_only=True)[0]["send_error"] == "offline"
+
+
+def test_formatter_accepts_json_number_strings():
+    payload = {"event_type": "GOOD_DEAL", "artist": "Opeth", "title": "Blackwater Park", "store": "store", "price": "5490", "market_median": "7200", "effective_price": "5700", "effective_price_known": True, "discount_pct": "23.75", "url": "https://example.test"}
+    text = format_alert(payload)
+    assert "Цена: 5490 ₽" in text and "Выгода: 24%" in text
+
+
+def test_alert_send_isolates_formatter_failure_and_counts_current_run(tmp_path, monkeypatch, capsys):
+    repository, release_id = _repository(tmp_path)
+    offer_id = repository.offers_for_release(release_id)[0][0]
+    with repository._connect() as connection:
+        connection.execute("DELETE FROM alerts")
+    repository.save_alert(release_id=release_id, offer_id=offer_id, event_type="BAD", event_key="1", payload={})
+    repository.save_alert(release_id=release_id, offer_id=offer_id, event_type="GOOD", event_key="2", payload={"event_type": "GOOD_DEAL", "artist": "Opeth", "title": "Blackwater Park", "store": "store", "price": "5000", "url": "https://example.test"})
+    class Notifier:
+        configured = True
+        def send(self, _text): pass
+    monkeypatch.setattr("vinyl_deals.notifications.TelegramNotifier", lambda: Notifier())
+    monkeypatch.setattr("sys.argv", ["vinyl-deals", "alerts", "--database", str(repository.path), "send"])
+    assert cli.main() == 1
+    assert "Telegram sent: 1, failed: 1" in capsys.readouterr().out
+    rows = repository.alerts()
+    assert rows[0]["sent_at"] is None and rows[0]["send_error"] == "delivery failed: KeyError"
+    assert rows[1]["sent_at"] is not None
+
+
+def test_alert_send_continues_after_transport_failure_without_leaking_error(tmp_path, monkeypatch):
+    repository, release_id = _repository(tmp_path)
+    offer_id = repository.offers_for_release(release_id)[0][0]
+    payload = {"event_type": "GOOD_DEAL", "artist": "Opeth", "title": "Blackwater Park", "store": "store", "price": "5000", "url": "https://example.test"}
+    repository.save_alert(release_id=release_id, offer_id=offer_id, event_type="GOOD", event_key="one", payload=payload)
+    repository.save_alert(release_id=release_id, offer_id=offer_id, event_type="GOOD", event_key="two", payload=payload)
+    class Notifier:
+        configured = True
+        calls = 0
+        def send(self, _text):
+            self.calls += 1
+            if self.calls == 1: raise RuntimeError("token=must-not-be-stored")
+    monkeypatch.setattr("vinyl_deals.notifications.TelegramNotifier", lambda: Notifier())
+    monkeypatch.setattr("sys.argv", ["vinyl-deals", "alerts", "--database", str(repository.path), "send"])
+    assert cli.main() == 1
+    rows = repository.alerts()
+    assert rows[0]["sent_at"] is None and rows[0]["send_error"] == "delivery failed: RuntimeError"
+    assert rows[1]["sent_at"] is not None
