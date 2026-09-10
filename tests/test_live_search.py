@@ -7,6 +7,7 @@ from time import sleep
 
 from vinyl_deals.adapters.vinyl_ru import VinylRuAdapter
 from vinyl_deals.adapters.collectomania import CollectomaniaAdapter
+from vinyl_deals.adapters.drhead import DrHeadAdapter
 from vinyl_deals.adapters.imagine_club import ImagineClubAdapter
 from vinyl_deals.adapters.wave2 import MaximumVinylAdapter
 from vinyl_deals.domain import Availability, RawOffer, StoreSearchQuery, StoreSearchResult, StoreState
@@ -246,3 +247,37 @@ def test_live_search_uses_multiple_verified_production_adapters_without_catalogu
     assert deal.comparable_count == 3
     assert deal.market_median == median_price(comparison_prices)
     assert deal.discount_pct == (deal.market_median - target.price) / deal.market_median * 100
+
+
+def test_live_search_uses_real_product_enrichment_for_production_adapters(tmp_path):
+    """Search and detail parsing both run from saved public responses."""
+    imagine_search = Path("tests/fixtures/imagine_club/live_search_communique.html").read_text(encoding="utf-8")
+    imagine_product = Path("tests/fixtures/imagine_club/live_search_communique_product.html").read_text(encoding="utf-8")
+    drhead_search = Path("tests/fixtures/drhead/live_search_communique.html").read_text(encoding="utf-8")
+    drhead_product = Path("tests/fixtures/drhead/live_search_communique_product.html").read_text(encoding="utf-8")
+
+    def imagine_factory():
+        adapter = ImagineClubAdapter()
+        adapter._fetch = lambda url: imagine_search if "/search" in url else imagine_product
+        adapter.get_catalog = lambda: (_ for _ in ()).throw(AssertionError("catalogue must not run"))
+        return adapter
+
+    def drhead_factory():
+        adapter = DrHeadAdapter()
+        adapter._fetch = lambda url: drhead_search if "/search/" in url else drhead_product
+        adapter.get_catalog = lambda: (_ for _ in ()).throw(AssertionError("catalogue must not run"))
+        return adapter
+
+    repository = SQLiteRepository(tmp_path / "detail-enrichment.sqlite3")
+    result = live_search(
+        repository,
+        StoreSearchQuery(title="Communique"),
+        adapter_factories={"imagine_club": imagine_factory, "drhead": drhead_factory},
+        enrichment_limit=1,
+    )
+
+    assert {store.source: store.offers for store in result.stores} == {"imagine_club": 1, "drhead": 1}
+    persisted = {offer.source: offer for _, offer in repository.offers_for_matching()}
+    assert persisted["imagine_club"].barcode == "602537529049"
+    assert persisted["imagine_club"].raw_data["detail_fields"]["лейбл"] == "Universal"
+    assert persisted["drhead"].raw_data["public_card"] is True

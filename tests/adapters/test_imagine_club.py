@@ -41,4 +41,8 @@ def test_targeted_search_uses_verified_drupal_endpoint(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(adapter, "_fetch", lambda url: calls.append(url) or html)
     result = adapter.search_offers(StoreSearchQuery(title="Communique"))
-    assert result.offers and calls == ["https://imagine-club.com/search?search_api_views_fulltext=Communique"]
+    assert calls == ["https://imagine-club.com/search?search_api_views_fulltext=Communique"]
+    assert [(offer.artist_raw, offer.title_raw, offer.price) for offer in result.offers[:2]] == [
+        ("Dire Straits", "Communique", Decimal("6990")),
+        ("Dire Straits", "Communique", Decimal("13490")),
+    ]

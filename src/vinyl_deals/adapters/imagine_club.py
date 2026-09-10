@@ -78,10 +78,12 @@ class ImagineClubAdapter(BaseStoreAdapter):
 
     def parse_listing(self, html: str, *, fetched_at: datetime | None = None) -> list[RawOffer]:
         timestamp = fetched_at or datetime.now(timezone.utc)
-        blocks = re.split(r'<div\s+about="(?=/)', html)[1:]
+        # Search pages include ``about`` attributes for artist links too.
+        # Split only on the outer record cards, otherwise a link can leak
+        # into the next card and borrow its product id/price.
+        blocks = re.split(r'(?=<div\s+about="/[^\"]+"[^>]*\bnode-disk\b)', html)[1:]
         offers: list[RawOffer] = []
         for block in blocks:
-            block = '<div about="' + block
             product_id = self._first(r'name="product_id"\s+value="(\d+)"', block)
             path = self._first(r'<div\s+about="([^"]+)"', block)
             if not product_id or not path:
@@ -114,6 +116,7 @@ class ImagineClubAdapter(BaseStoreAdapter):
             "title_raw": fields.get("название") or listing_offer.title_raw,
             "label": fields.get("лейбл") or None,
             "store_sku": sku or None,
+            "barcode": re.sub(r"\D", "", fields.get("штрих-код", "")) or listing_offer.barcode,
             "catalog_number_raw": listing_offer.catalog_number_raw,
             "release_year": self._year(fields.get("год", "")),
             "country": fields.get("страна") or listing_offer.country,
