@@ -1,7 +1,7 @@
 """Watchlist evaluation and alert persistence, independent from transports."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -34,6 +34,12 @@ class AlertCandidate:
 def _rank(value: str | None) -> int:
     ranks = {"NORMAL": 0, "INTERESTING": 1, "GOOD": 2, "HOT": 3, "VERY_HOT": 4}
     return ranks.get(value or "NORMAL", 0)
+
+
+def _meets_deal_threshold(deal_class: str, selected_class: str | None) -> bool:
+    """Default to GOOD; an explicit watch setting is honored verbatim."""
+    threshold = _rank(selected_class) if selected_class else _rank("GOOD")
+    return _rank(deal_class) >= threshold
 
 
 def _previous_stock(repository: SQLiteRepository, offer_id: int) -> bool:
@@ -92,7 +98,7 @@ def evaluate_watchlist(repository: SQLiteRepository, *, now: datetime | None = N
                 events.append((AlertEvent.LOCAL_PRICE_DROP if local else AlertEvent.PRICE_DROP, f"price:{offer.fetched_at.isoformat()}:{offer.price}"))
             if deal and deal.is_historical_low:
                 events.append((AlertEvent.LOCAL_HISTORICAL_LOW if local else AlertEvent.HISTORICAL_LOW, f"low:{offer.fetched_at.isoformat()}:{offer.price}"))
-            if deal and _rank(str(deal.deal_class)) >= max(2, _rank(entry["min_deal_class"] if isinstance(entry["min_deal_class"], str) else None)):
+            if deal and _meets_deal_threshold(str(deal.deal_class), entry["min_deal_class"] if isinstance(entry["min_deal_class"], str) else None):
                 events.append((AlertEvent.GOOD_DEAL, f"deal:{deal.deal_class}:{deal.discount_pct}"))
             for event_type, state in events:
                 candidate = AlertCandidate(release.id, offer_id, event_type, state, _payload(release, offer, deal, event_type))

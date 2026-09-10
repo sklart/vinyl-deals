@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import pytest
 
-from vinyl_deals.alerts import AlertEvent, evaluate_watchlist
+from vinyl_deals.alerts import AlertEvent, _meets_deal_threshold, evaluate_watchlist
 from vinyl_deals import cli
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.domain import Availability, RawOffer
@@ -68,6 +69,17 @@ def test_good_deal_uses_existing_pricing_engine(tmp_path):
     assert any(item.event_type == AlertEvent.GOOD_DEAL for item in events)
     persisted = next(row["payload"] for row in repository.alerts() if row["event_type"] == AlertEvent.GOOD_DEAL)
     assert "Выгода:" in format_alert(persisted)
+
+
+@pytest.mark.parametrize(("selected", "deal", "expected"), [
+    (None, "INTERESTING", False), (None, "GOOD", True),
+    ("NORMAL", "NORMAL", True), ("INTERESTING", "INTERESTING", True),
+    ("GOOD", "INTERESTING", False), ("GOOD", "GOOD", True),
+    ("HOT", "GOOD", False), ("HOT", "HOT", True),
+    ("VERY_HOT", "HOT", False), ("VERY_HOT", "VERY_HOT", True),
+])
+def test_min_deal_class_thresholds(selected, deal, expected):
+    assert _meets_deal_threshold(deal, selected) is expected
 
 
 def test_unknown_local_delivery_does_not_pass_max_price(tmp_path):
