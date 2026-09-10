@@ -22,7 +22,9 @@ def main() -> None:
     commit = os.getenv("GITHUB_SHA") or subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True).strip()
     metadata = BUILD / "build_meta.json"
     metadata.write_text(json.dumps({"version": __version__, "commit": commit[:12], "build_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")}), encoding="utf-8")
+    icon = ROOT / "src" / "vinyl_deals" / "assets" / "vinyl-deals.ico"
     data = f"{metadata}{os.pathsep}vinyl_deals"
+    icon_data = f"{icon}{os.pathsep}vinyl_deals/assets"
     portable = DIST / "VinylDeals"
     gui_dist = BUILD / "gui-dist"
     cli_dist = BUILD / "cli-dist"
@@ -48,6 +50,8 @@ def main() -> None:
         str(ROOT / "tools" / "pyinstaller_pyside_runtime_hook.py"),
         "--add-data",
         data,
+        "--add-data",
+        icon_data,
     ]
     for module in ("QtCore", "QtGui", "QtWidgets", "QtNetwork"):
         common.extend(["--hidden-import", f"PySide6.{module}"])
@@ -55,7 +59,7 @@ def main() -> None:
     # DLLs and the required platform plugins in one consistent layout.  Do not
     # add those files manually: duplicate Qt DLLs lead Windows to load an
     # incompatible copy and QtWidgets then fails before the GUI starts.
-    subprocess.check_call([*common, "--windowed", "--distpath", str(gui_dist), "--name", "vinyl-deals-gui", str(ROOT / "tools" / "gui_entry.py")], cwd=ROOT)
+    subprocess.check_call([*common, "--windowed", "--icon", str(icon), "--distpath", str(gui_dist), "--name", "vinyl-deals-gui", str(ROOT / "tools" / "gui_entry.py")], cwd=ROOT)
     shutil.copytree(gui_dist / "vinyl-deals-gui", portable, dirs_exist_ok=True)
     # PyInstaller can collect ICU 78 from an unrelated dependency into
     # ``_internal``. Qt's Windows build links against the system ICU ABI and

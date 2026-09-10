@@ -92,6 +92,12 @@ def test_resource_path_supports_pyinstaller_bundle(tmp_path, monkeypatch):
     assert resource_path("build_meta.json") == bundled / "build_meta.json"
 
 
+def test_application_icon_is_shipped_with_source_tree():
+    icon = resource_path("assets/vinyl-deals.ico")
+    assert icon.is_file()
+    assert icon.stat().st_size > 1_000
+
+
 def test_autostart_enable_disable_uses_user_run_key(monkeypatch):
     values = {}
 

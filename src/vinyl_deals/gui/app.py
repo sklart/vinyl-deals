@@ -2,15 +2,25 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QMessageBox
 
-from vinyl_deals.runtime import SingleInstanceLock, bootstrap_application_data, configure_logging, install_exception_hook
+from vinyl_deals.runtime import (
+    SingleInstanceLock,
+    bootstrap_application_data,
+    configure_logging,
+    install_exception_hook,
+    resource_path,
+)
 from .main_window import MainWindow
 
 
 def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
+    icon = QIcon(str(resource_path("assets/vinyl-deals.ico")))
+    if not icon.isNull():
+        app.setWindowIcon(icon)
     arguments = argv if argv is not None else sys.argv
     try:
         database = bootstrap_application_data()
@@ -27,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     install_exception_hook(logger, lambda title, message: QMessageBox.critical(None, title, message))
     window = MainWindow(database)
+    if not icon.isNull():
+        window.setWindowIcon(icon)
     app.aboutToQuit.connect(lock.release)
     window.show()
     return app.exec()
