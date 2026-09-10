@@ -11,8 +11,22 @@ from vinyl_deals.domain import ScrapeResult, StoreState
 
 class VidikaAdapter(PublicHtmlVinylAdapter):
     source, store_name = "vidika", "Vidika"
-    catalog_url, base_url = "https://vidika.su/catalog/zarubezhnyy-vinil/", "https://vidika.su"
-    def _page_url(self, page): return f"{self.catalog_url}?page={page}"
+    catalog_url, base_url = "https://vidika.su/category/zarubezhnyy-vinil/", "https://vidika.su"
+    catalog_urls = ("https://vidika.su/category/zarubezhnyy-vinil/", "https://vidika.su/category/russkiy-vinil/")
+    def _page_url(self, page, **_kwargs): return f"{self.catalog_url}?page={page}"
+
+    def get_catalog(self):
+        original, offers, processed = self.catalog_url, [], 0
+        try:
+            for root in self.catalog_urls:
+                self.catalog_url = root
+                result = super().get_catalog()
+                if result.state != StoreState.ACTIVE:
+                    return result
+                offers.extend(result.offers); processed += result.pages_processed
+            return ScrapeResult(tuple({item.source_product_id: item for item in offers}.values()), pages_processed=processed)
+        finally:
+            self.catalog_url = original
 
 
 class MaximumVinylAdapter(PublicHtmlVinylAdapter):

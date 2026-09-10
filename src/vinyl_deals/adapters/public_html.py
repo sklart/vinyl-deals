@@ -28,6 +28,7 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
     source = "public_html"
     store_name = "Public store"
     catalog_url = ""
+    catalog_urls: tuple[str, ...] = ()
     base_url = ""
 
     def __init__(self, *, timeout_seconds: float = 20.0, page_limit: int | None = None, delay_seconds: float = 0.25) -> None:
@@ -71,15 +72,19 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
 
     def parse_product_page(self, html: str, listing_offer: RawOffer) -> RawOffer:
         text = self._text(html)
-        barcode = self._first(r"(?:EAN|GTIN|Штрих[ -]?код|Barcode)\s*[:#]?\s*(\d{12,14})", text, re.I) or listing_offer.barcode
-        catalog = self._first(r"(?:каталожн(?:ый|ого)\s+(?:номер|№)|catalog(?:ue)?\s*(?:number|no\.?))\s*[:#]?\s*([A-Za-z0-9._/-]+)", text, re.I) or listing_offer.catalog_number_raw
-        label = self._property(text, "лейбл", "label") or listing_offer.label
-        country = self._property(text, "страна", "country") or listing_offer.country
-        year = self._year(self._property(text, "год выпуска", "год", "release year", "year")) or listing_offer.release_year
-        format_value = self._format(text) or listing_offer.format
+        properties = self._properties(html)
+        def named(*keys: str) -> str:
+            return next((value for key, value in properties.items() if key in {item.casefold() for item in keys}), "")
+        barcode = self._first(r"(\d{12,14})", named("EAN", "GTIN", "Штрих-код", "Barcode")) or self._first(r"(?:EAN|GTIN|Штрих[ -]?код|Barcode)\s*[:#]?\s*(\d{12,14})", text, re.I) or listing_offer.barcode
+        catalog = named("Каталожный номер", "Catalog number") or self._first(r"(?:каталожн(?:ый|ого)\s+(?:номер|№)|catalog(?:ue)?\s*(?:number|no\.?))\s*[:#]?\s*([A-Za-z0-9._/-]+)", text, re.I) or listing_offer.catalog_number_raw
+        label = named("Лейбл", "Label") or self._property(text, "лейбл", "label") or listing_offer.label
+        country = named("Страна", "Country") or self._property(text, "страна", "country") or listing_offer.country
+        year = self._year(named("Год выпуска", "Год", "Release year", "Year") or self._property(text, "год выпуска", "год", "release year", "year")) or listing_offer.release_year
+        format_value = self._format(named("Формат", "Format")) or self._format(text) or listing_offer.format
+        disc_count = self._disc_count(named("Количество дисков", "Disc count", "Количество пластинок")) or listing_offer.disc_count
         return RawOffer(**{**{name: getattr(listing_offer, name) for name in listing_offer.__dataclass_fields__},
             "barcode": barcode, "catalog_number_raw": catalog, "label": label, "country": country,
-            "release_year": year, "format": format_value,
+            "release_year": year, "format": format_value, "disc_count": disc_count,
             "raw_data": {**listing_offer.raw_data, "public_card": True},
         })
 
@@ -199,7 +204,7 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
 
     @staticmethod
     def _year(value: str) -> int | None:
-        match = re.search(r"(?:19|20)\d{2}", value)
+        match = re.search(r"(?:19|20)\d{2}", value or "")
         return int(match.group()) if match else None
 
     @classmethod
@@ -214,6 +219,11 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
     def _properties(cls, html: str) -> dict[str, str]:
         pairs = re.findall(r'<(?:tr|dl|div)[^>]*>\s*<(?:th|dt|span)[^>]*>(.*?)</(?:th|dt|span)>\s*<(?:td|dd|span)[^>]*>(.*?)</(?:td|dd|span)>', html, re.I | re.S)
         return {cls._text(key).casefold(): cls._text(value) for key, value in pairs}
+
+    @staticmethod
+    def _disc_count(value: str) -> int | None:
+        match = re.search(r"\d+", value)
+        return int(match.group()) if match else None
 
     @staticmethod
     def _looks_like_vinyl(value: str) -> bool:

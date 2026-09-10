@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from vinyl_deals.adapters.wave2 import AVSoundAdapter, MaximumVinylAdapter, PultAdapter, TishinaAdapter, VernoshopAdapter, VidikaAdapter, VinylmarktAdapter
+from vinyl_deals.adapters.wave2 import AVSoundAdapter, MaximumVinylAdapter, OnlineTradeAdapter, PultAdapter, TishinaAdapter, VernoshopAdapter, VidikaAdapter, VinylmarktAdapter
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.domain import Availability, StoreState
 from vinyl_deals.matching.service import build_match_queue
@@ -49,7 +49,7 @@ def test_pagination_dedup_and_zero_offers(adapter_type, source, _sku, monkeypatc
     listing = (FIXTURES / source / "listing.html").read_text(encoding="utf-8")
     monkeypatch.setattr(adapter, "_fetch", lambda _url: listing + listing)
     result = adapter.get_catalog()
-    assert result.state == StoreState.ACTIVE and len(result.offers) == 1 and result.pages_processed == 1
+    assert result.state == StoreState.ACTIVE and len(result.offers) == 1 and result.pages_processed == (2 if source == "vidika" else 1)
     monkeypatch.setattr(adapter, "_fetch", lambda _url: "<html>no products</html>")
     assert adapter.get_catalog().state == StoreState.DEGRADED
 
@@ -60,6 +60,29 @@ def test_pult_is_explicitly_degraded_when_public_catalogue_is_access_restricted(
     result = adapter.get_catalog()
     assert result.state == StoreState.DEGRADED
     assert "access-check" in result.warnings[0].casefold() or "captcha" in result.warnings[0].casefold()
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("Виниловая пластинка Opeth - Blackwater Park (LP)", True), ("Opeth - Blackwater Park (LP+CD)", True),
+    ("Opeth - Blackwater Park Audio CD", False), ("Opeth vinyl sticker DVD", False), ("Кассета Opeth", False),
+])
+def test_onlinetrade_strict_mixed_media_classifier(name, expected):
+    assert OnlineTradeAdapter._looks_like_vinyl(name) is expected
+
+
+def test_onlinetrade_fixture_filters_mixed_catalogue_and_keeps_sku():
+    adapter = OnlineTradeAdapter()
+    offers = adapter.parse_listing((FIXTURES / "onlinetrade" / "mixed_media.html").read_text(encoding="utf-8"))
+    assert [offer.source_product_id for offer in offers] == ["ot-vinyl", "ot-hybrid"]
+    assert all(offer.catalog_number_raw is None for offer in offers)
+
+
+def test_structured_properties_take_priority_and_do_not_bleed_into_neighbours():
+    adapter = OnlineTradeAdapter()
+    listing = adapter.parse_listing('<div class="product-item" data-product-id="sku1"><a class="product-title" href="/vinilovaya_plastinka_opeth">Виниловая пластинка Opeth - Blackwater Park (2LP)</a><span class="price">5000</span><span>В наличии</span></div>')[0]
+    html = '<table><tr><th>GTIN</th><td>1234567890123</td></tr><tr><th>Каталожный номер</th><td>MOVLP001</td></tr><tr><th>Лейбл</th><td>Music On Vinyl</td></tr><tr><th>Количество дисков</th><td>2</td></tr></table>'
+    result = adapter.parse_product_page(html, listing)
+    assert result.barcode == "1234567890123" and result.catalog_number_raw == "MOVLP001" and result.store_sku == "sku1" and result.disc_count == 2
 
 
 def test_wave2_offers_merge_into_one_release_and_choose_best_price(tmp_path):
