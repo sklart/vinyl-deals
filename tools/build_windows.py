@@ -23,7 +23,7 @@ def main() -> None:
     metadata.write_text(json.dumps({"version": __version__, "commit": commit[:12], "build_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")}), encoding="utf-8")
     data = f"{metadata}{os.pathsep}vinyl_deals"
     pyside_binaries = f"{Path(PySide6.__file__).resolve().parent / '*.dll'}{os.pathsep}PySide6"
-    common = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--specpath", str(BUILD), "--collect-all", "PySide6", "--add-binary", pyside_binaries, "--add-data", data]
+    common = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--specpath", str(BUILD), "--runtime-hook", str(ROOT / "tools" / "pyinstaller_pyside_runtime_hook.py"), "--collect-all", "PySide6", "--add-binary", pyside_binaries, "--add-data", data]
     subprocess.check_call([*common, "--windowed", "--name", "vinyl-deals-gui", str(ROOT / "tools" / "gui_entry.py")], cwd=ROOT)
     subprocess.check_call([*common, "--name", "vinyl-deals", str(ROOT / "tools" / "cli_entry.py")], cwd=ROOT)
 
