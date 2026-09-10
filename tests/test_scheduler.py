@@ -9,6 +9,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from vinyl_deals.database import SQLiteRepository
+from vinyl_deals import scheduler as scheduler_module
 from vinyl_deals.scheduler import ALLOWED_INTERVALS, Scheduler
 
 
@@ -39,15 +40,16 @@ def test_scheduler_is_disabled_by_default_and_uses_supported_intervals(qapp, tmp
     scheduler.shutdown()
 
 
-def test_scheduler_does_not_run_two_cycles_at_once(qapp, tmp_path):
+def test_scheduler_does_not_run_two_cycles_at_once(qapp, tmp_path, monkeypatch):
     started, unblock = Event(), Event()
 
-    def refresh(*_args, **_kwargs):
+    def cycle(*_args, **_kwargs):
         started.set()
         unblock.wait(1)
-        return ()
+        return {"alerts": 0, "sent": 0, "failed": 0}
 
-    scheduler = Scheduler(SQLiteRepository(tmp_path / "scheduler.sqlite3"), refresh_service=refresh)
+    monkeypatch.setattr(scheduler_module, "run_cycle", cycle)
+    scheduler = Scheduler(SQLiteRepository(tmp_path / "scheduler.sqlite3"))
     assert scheduler.trigger() is True
     assert wait_until(qapp, started.is_set)
     assert scheduler.trigger() is False
