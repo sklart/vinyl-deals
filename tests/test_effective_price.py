@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+import pytest
 
 from vinyl_deals.domain import RawOffer
 from vinyl_deals.database import SQLiteRepository
@@ -11,8 +12,8 @@ def offer(**values) -> RawOffer:
 
 
 def test_local_pickup_is_product_price_and_does_not_invent_delivery() -> None:
-    result = calculate_effective_price(offer(local_store=True, pickup_available=True))
-    assert (result.total, result.is_pickup, result.delivery_known) == (Decimal("1000"), True, True)
+    result = calculate_effective_price(offer(local_store=True, pickup_available=True, unconditional_discount=Decimal("100")))
+    assert (result.delivery_cost, result.total, result.is_pickup, result.delivery_known) == (Decimal("0"), Decimal("900"), True, True)
 
 
 def test_known_delivery_and_unconditional_discount_are_explicit() -> None:
@@ -22,8 +23,14 @@ def test_known_delivery_and_unconditional_discount_are_explicit() -> None:
 
 def test_unknown_delivery_is_not_represented_as_known_zero_cost() -> None:
     result = calculate_effective_price(offer())
-    assert result.total == Decimal("1000")
+    assert result.total is None
     assert not result.delivery_known
+
+
+@pytest.mark.parametrize("values", ({"delivery_cost": Decimal("-1")}, {"unconditional_discount": Decimal("-1")}, {"unconditional_discount": Decimal("1001")}))
+def test_invalid_delivery_or_discount_is_rejected(values) -> None:
+    with pytest.raises(ValueError):
+        calculate_effective_price(offer(**values))
 
 
 def test_effective_price_fields_survive_offer_persistence(tmp_path) -> None:

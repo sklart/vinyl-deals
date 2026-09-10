@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.domain import Availability, RawOffer, Release
+from vinyl_deals.effective_price import calculate_effective_price
 from vinyl_deals.matching.normalize import barcode as normalized_barcode
 from vinyl_deals.matching.normalize import catalog_number, text
 from vinyl_deals.pricing import DEFAULT_FRESHNESS_DAYS, DealClass, condition_bucket, evaluate_offer
@@ -23,6 +24,11 @@ class OfferSearchResult:
     url: str
     deal_class: DealClass | None
     discount_pct: Decimal | None
+    city: str | None = None
+    local_store: bool = False
+    pickup_available: bool = False
+    effective_price: Decimal | None = None
+    effective_price_known: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +46,7 @@ class ReleaseSearchResult:
     best_used_offer: OfferSearchResult | None
     lowest_price_offer: OfferSearchResult | None
     discogs_url: str | None
+    best_effective_offer: OfferSearchResult | None = None
 
     @property
     def best_offer(self) -> OfferSearchResult | None:
@@ -84,7 +91,13 @@ def search_offers(repository: SQLiteRepository, release_id: int, *, now: datetim
         if offer.fetched_at < cutoff:
             continue
         deal = evaluate_offer(repository, offer_id, now=point, freshness_days=freshness_days)
-        results.append(OfferSearchResult(offer_id, offer.source, offer.price, offer.availability, offer.condition_media, offer.url, deal.deal_class if deal else None, deal.discount_pct if deal else None))
+        effective = calculate_effective_price(offer)
+        results.append(OfferSearchResult(
+            offer_id, offer.source, offer.price, offer.availability, offer.condition_media, offer.url,
+            deal.deal_class if deal else None, deal.discount_pct if deal else None,
+            offer.city, offer.local_store, offer.pickup_available,
+            effective.total if effective else None, effective.delivery_known if effective else False,
+        ))
     return tuple(sorted(results, key=lambda item: (item.availability != Availability.IN_STOCK, item.price is None, item.price or Decimal("0"), item.store.casefold(), item.offer_id)))
 
 
@@ -118,10 +131,16 @@ def find_lowest_price_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearc
     return _lowest(_available(offers))
 
 
+def find_best_effective_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult | None:
+    """Lowest complete effective price; unknown delivery is ineligible."""
+    candidates = [offer for offer in _available(offers) if offer.effective_price_known and offer.effective_price is not None]
+    return min(candidates, key=lambda item: (item.effective_price, item.store.casefold(), item.offer_id)) if candidates else None
+
+
 def search_releases(repository: SQLiteRepository, *, artist: str | None = None, title: str | None = None, barcode: str | None = None, catalog: str | None = None, label: str | None = None, year: int | None = None, format: str | None = None, now: datetime | None = None, freshness_days: int = DEFAULT_FRESHNESS_DAYS) -> list[ReleaseSearchResult]:
     """Find Releases using normalized AND semantics for every supplied field."""
     return [
-        ReleaseSearchResult(release.id, release.artist, release.title, release.label, release.catalog_number, release.barcode, release.release_year, release.format, offers := search_offers(repository, release.id, now=now, freshness_days=freshness_days), find_best_new_offer(offers), find_best_used_offer(offers), find_lowest_price_offer(offers), discogs_search_url(release))
+        ReleaseSearchResult(release.id, release.artist, release.title, release.label, release.catalog_number, release.barcode, release.release_year, release.format, offers := search_offers(repository, release.id, now=now, freshness_days=freshness_days), find_best_new_offer(offers), find_best_used_offer(offers), find_lowest_price_offer(offers), discogs_search_url(release), find_best_effective_offer(offers))
         for release in repository.releases_for_search()
         if _matches(release, artist=artist, title=title, barcode=barcode, catalog=catalog, label=label, year=year, format=format)
     ]

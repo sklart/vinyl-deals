@@ -83,13 +83,16 @@ def main() -> int:
             effective = calculate_effective_price(offer)
             if effective:
                 rows.append((effective.total, offer, effective))
-        rows.sort(key=lambda row: row[0])
+        # Unknown delivery follows complete totals: it is never ordered as a
+        # zero-cost delivery offer.
+        rows.sort(key=lambda row: (not row[2].delivery_known, row[0] is None, row[0] or Decimal("0"), row[1].source.casefold()))
         if not rows:
             print("No fresh local offers found.")
             return 0
         for _, offer, effective in rows[:args.limit]:
             suffix = "самовывоз" if effective.is_pickup else ("доставка учтена" if effective.delivery_known else "доставка неизвестна")
-            print(f"{offer.artist_raw or '-'} — {offer.title_raw or '-'}\nStore: {offer.source}\nPrice: {offer.price} RUB\nEffective price: {effective.total} RUB ({suffix})\n{offer.url}\n")
+            total = f"{effective.total} RUB" if effective.total is not None else "?"
+            print(f"{offer.artist_raw or '-'} — {offer.title_raw or '-'}\nStore: {offer.source}\nPrice: {offer.price} RUB\nEffective price: {total} ({suffix})\n{offer.url}\n")
         return 0
     if args.command == "search":
         from vinyl_deals.search import search_releases
@@ -103,6 +106,7 @@ def main() -> int:
             def best_line(name, offer):
                 return f"{name}: {offer.store} — {offer.price} RUB" if offer else f"{name}: unavailable"
             print(best_line("Lowest price", result.lowest_price_offer))
+            print(best_line("Best effective", result.best_effective_offer))
             print(best_line("Best new", result.best_new_offer))
             print(best_line("Best used", result.best_used_offer) + "\n")
             for offer in result.offers:

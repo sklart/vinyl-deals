@@ -8,8 +8,8 @@ from vinyl_deals.gui.main_window import MainWindow
 from vinyl_deals.search import OfferSearchResult, ReleaseSearchResult
 
 
-def offer(identifier, store, price, *, availability=Availability.IN_STOCK, condition="NEW", url=None):
-    return OfferSearchResult(identifier, store, Decimal(str(price)), availability, condition, url or f"https://example.test/{identifier}", None, None)
+def offer(identifier, store, price, *, availability=Availability.IN_STOCK, condition="NEW", url=None, city=None, local_store=False, pickup_available=False, effective_price=None, effective_price_known=False):
+    return OfferSearchResult(identifier, store, Decimal(str(price)), availability, condition, url or f"https://example.test/{identifier}", None, None, city, local_store, pickup_available, effective_price, effective_price_known)
 
 
 def release():
@@ -47,7 +47,7 @@ def test_window_search_fields_results_and_offer_selection(qapp, tmp_path):
     assert [window.offer_table.item(row, 0).text() for row in range(3)] == ["Vinyl.ru", "Imagine Club", "Collectomania"]
     assert "Lowest price" in window.offer_table.item(0, 1).toolTip()
     assert "Best used" in window.offer_table.item(0, 1).toolTip()
-    assert window.offer_table.item(2, 3).text() == "Нет в наличии"
+    assert window.offer_table.item(2, 5).text() == "Нет в наличии"
     assert not window.offer_table.item(2, 1).toolTip()
     assert not window.open_store_button.isEnabled()
     window.offer_table.selectRow(1)
@@ -56,6 +56,22 @@ def test_window_search_fields_results_and_offer_selection(qapp, tmp_path):
     window.offer_table.clearSelection()
     qapp.processEvents()
     assert not window.open_store_button.isEnabled()
+    window.close()
+
+
+def test_window_shows_local_pickup_and_effective_price(qapp, tmp_path):
+    local = offer(1, "РИО", 5000, city="Ростов-на-Дону", local_store=True, pickup_available=True, effective_price=Decimal("5000"), effective_price_known=True)
+    remote = offer(2, "Imagine", 4650)
+    item = ReleaseSearchResult(7, "Opeth", "Blackwater Park", None, None, None, None, None, (local, remote), local, None, remote, None, local)
+    window = MainWindow(tmp_path / "gui-local.sqlite3", search_service=lambda *_args, **_kwargs: [item])
+    window.perform_search()
+    assert window.offer_table.rowCount() == 2
+    local_row = next(row for row in range(2) if window.offer_table.item(row, 0).text() == "📍 РИО")
+    remote_row = 1 - local_row
+    assert window.offer_table.item(local_row, 2).text() == "5000 RUB"
+    assert window.offer_table.item(local_row, 3).text() == "Да"
+    assert window.offer_table.item(remote_row, 2).text() == "?"
+    assert "Best effective" in window.offer_table.item(local_row, 2).toolTip()
     window.close()
 
 

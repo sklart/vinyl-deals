@@ -70,6 +70,29 @@ def test_explicit_best_prices_separate_new_used_and_lowest(tmp_path):
     assert result.best_offer.price == Decimal("8000")
 
 
+def test_best_effective_offer_requires_known_delivery_or_pickup(tmp_path):
+    repo = SQLiteRepository(tmp_path / "effective-search.sqlite3")
+    add(repo, "unknown-delivery", "1", 3000, condition="NEW")
+    repo.upsert_offer(RawOffer(
+        source="rio_rostov", source_product_id="2", url="https://example.test/rio", fetched_at=NOW,
+        artist_raw="Opeth", title_raw="Blackwater Park", barcode="4006381333931", catalog_number_raw="MOVLP001",
+        label="Music On Vinyl", release_year=2021, format="2LP", condition_media="NEW", price=Decimal("5000"),
+        availability=Availability.IN_STOCK, city="Ростов-на-Дону", local_store=True, pickup_available=True,
+    ))
+    add(repo, "known-delivery", "3", 6000, condition="NEW")
+    stored = repo.offer_by_id(3)[1]
+    repo.upsert_offer(RawOffer(**{**{name: getattr(stored, name) for name in stored.__dataclass_fields__}, "delivery_cost": Decimal("200")}))
+    build_match_queue(repo)
+
+    result = search_releases(repo, title="Blackwater Park", now=NOW)[0]
+    assert result.lowest_price_offer.store == "unknown-delivery"
+    assert result.best_effective_offer.store == "rio_rostov"
+    unknown = next(offer for offer in result.offers if offer.store == "unknown-delivery")
+    known = next(offer for offer in result.offers if offer.store == "known-delivery")
+    assert unknown.effective_price is None and not unknown.effective_price_known
+    assert known.effective_price == Decimal("6200") and known.effective_price_known
+
+
 def test_release_uses_nonempty_semantically_equivalent_artist_and_title(tmp_path):
     repo = SQLiteRepository(tmp_path / "release-text.sqlite3")
     add(repo, "one", "1", 100, artist="OPETH", title="Blackwater   Park")

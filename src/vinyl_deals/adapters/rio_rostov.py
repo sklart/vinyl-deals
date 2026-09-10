@@ -127,7 +127,7 @@ class RioRostovAdapter(BaseStoreAdapter):
 
     @staticmethod
     def _condition(content: str) -> str | None:
-        match = re.search(r"\b([smvgex]{1,3})\s*/\s*([smvgex]{1,3})\b", content, re.I)
+        match = re.search(r"(?<!\w)(S|M|NM|EX|VG\+|VG|G)\s*/\s*(S|M|NM|EX|VG\+|VG|G)(?!\w)", content, re.I)
         if not match:
             return None
         value = match.group(1).casefold()

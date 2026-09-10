@@ -79,7 +79,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(buttons)
         splitter = QSplitter(Qt.Orientation.Vertical)
         self.release_table = self._table(("Исполнитель", "Альбом", "Label", "Catalog", "Год", "Формат", "Barcode"), "release_table")
-        self.offer_table = self._table(("Магазин", "Цена", "Состояние", "Наличие", "Deal"), "offer_table")
+        self.offer_table = self._table(("Магазин", "Цена", "Итоговая цена", "Самовывоз", "Состояние", "Наличие", "Deal"), "offer_table")
         splitter.addWidget(self.release_table)
         splitter.addWidget(self.offer_table)
         splitter.setSizes([280, 320])
@@ -181,16 +181,19 @@ class MainWindow(QMainWindow):
         if not result:
             return
         highlights: dict[int, list[str]] = {}
-        for name, offer in (("Lowest price", result.lowest_price_offer), ("Best new", result.best_new_offer), ("Best used", result.best_used_offer)):
+        for name, offer in (("Lowest price", result.lowest_price_offer), ("Best effective", result.best_effective_offer), ("Best new", result.best_new_offer), ("Best used", result.best_used_offer)):
             if offer:
                 highlights.setdefault(offer.offer_id, []).append(name)
         for offer in sorted(result.offers, key=lambda offer: (offer.availability.value != "in_stock", offer.price is None, offer.price or Decimal("0"), offer.store.casefold())):
             row = self.offer_table.rowCount()
             self.offer_table.insertRow(row)
             availability = "В наличии" if offer.availability.value == "in_stock" else "Нет в наличии" if offer.availability.value == "out_of_stock" else "Неизвестно"
-            values = (offer.store, f"{offer.price} RUB" if offer.price is not None else "-", offer.condition or "UNKNOWN", availability, offer.deal_class.value if offer.deal_class else "-")
+            store = f"📍 {offer.store}" if offer.local_store else offer.store
+            effective = f"{offer.effective_price} RUB" if offer.effective_price_known and offer.effective_price is not None else "?"
+            pickup = "Да" if offer.pickup_available else "Нет"
+            values = (store, f"{offer.price} RUB" if offer.price is not None else "-", effective, pickup, offer.condition or "UNKNOWN", availability, offer.deal_class.value if offer.deal_class else "-")
             names = highlights.get(offer.offer_id, [])
-            color = QColor("#fff3bf") if "Lowest price" in names else QColor("#d3f9d8") if "Best new" in names else QColor("#d0ebff")
+            color = QColor("#fff3bf") if "Lowest price" in names else QColor("#d3f9d8") if "Best effective" in names or "Best new" in names else QColor("#d0ebff")
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, offer.url)
