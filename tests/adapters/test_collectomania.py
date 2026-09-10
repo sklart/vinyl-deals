@@ -1,7 +1,7 @@
 from decimal import Decimal
 from pathlib import Path
 from vinyl_deals.adapters.collectomania import CollectomaniaAdapter
-from vinyl_deals.domain import Availability
+from vinyl_deals.domain import Availability, StoreSearchQuery
 from vinyl_deals.database import SQLiteRepository
 
 def test_parses_collectomania_listing_offline() -> None:
@@ -21,3 +21,12 @@ def test_enriched_collectomania_offer_survives_persistence(tmp_path) -> None:
     repository = SQLiteRepository(tmp_path / "offers.sqlite3")
     repository.upsert_offer(enriched)
     assert repository.offers_for_matching() == [(1, enriched)]
+
+
+def test_targeted_search_uses_verified_insales_endpoint(monkeypatch) -> None:
+    adapter = CollectomaniaAdapter()
+    html = Path("tests/fixtures/collectomania/listing.html").read_text(encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(adapter, "_fetch", lambda url: calls.append(url) or html)
+    result = adapter.search_offers(StoreSearchQuery(title="Vultures 1"))
+    assert result.offers and calls == ["https://collectomania.ru/search?q=Vultures+1"]

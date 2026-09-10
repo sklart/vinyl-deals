@@ -32,9 +32,10 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
     catalog_url = ""
     catalog_urls: tuple[str, ...] = ()
     base_url = ""
-    # Conventional public search endpoint.  Store adapters override this when
-    # a different public path or query key is documented by their storefront.
-    search_path = "/search/"
+    # Production adapters must opt in with a verified public endpoint.  A
+    # generic ``/search/?q=`` is deliberately not a fallback: many shops use
+    # that path for a different CMS feature or return their home page.
+    search_path: str | None = None
     search_parameter = "q"
     reports_catalog_progress = True
 
@@ -74,6 +75,8 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
         """Fetch one public search page; never enumerate the catalogue here."""
         if query.is_empty():
             return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+        if not self.search_path:
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} has no verified public targeted-search endpoint.",))
         try:
             html = self._fetch(self._search_url(query))
             if self._is_blocked(html):
@@ -86,6 +89,7 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
             return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} public search unavailable ({detail}).",))
 
     def _search_url(self, query: StoreSearchQuery) -> str:
+        assert self.search_path
         separator = "&" if "?" in self.search_path else "?"
         return urljoin(self.base_url, self.search_path) + separator + urlencode({self.search_parameter: query.text()})
 

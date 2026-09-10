@@ -7,11 +7,11 @@ from html import unescape
 import re
 from time import sleep
 from urllib.error import HTTPError
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
-from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
+from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
 
 
 class CollectomaniaAdapter(BaseStoreAdapter):
@@ -51,6 +51,18 @@ class CollectomaniaAdapter(BaseStoreAdapter):
 
     def get_product(self, source_product_id: str) -> RawOffer | None:
         return None  # The source id has no independently addressable public URL.
+
+    def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
+        """InSales public header form: GET /search?q=… ."""
+        if query.is_empty():
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+        try:
+            html = self._fetch(f"{self.base_url}/search?{urlencode({'q': query.text()})}")
+            if any(marker in html.casefold() for marker in ("captcha", "access-check", "проверка безопасности")):
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Collectomania returned a CAPTCHA/access-check page.",))
+            return StoreSearchResult(self.source, tuple(self.parse_listing(html)))
+        except HTTPError as error:
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Collectomania returned HTTP {error.code}.",))
 
     def enrich_offer(self, offer: RawOffer) -> RawOffer:
         return self.parse_product_page(self._fetch(offer.url), offer)

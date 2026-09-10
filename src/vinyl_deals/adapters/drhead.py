@@ -9,11 +9,11 @@ import json
 import re
 from time import sleep
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
-from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
+from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
 
 
 class DrHeadAdapter(BaseStoreAdapter):
@@ -48,6 +48,18 @@ class DrHeadAdapter(BaseStoreAdapter):
             return ScrapeResult((), StoreState.DEGRADED, ("Dr.Head catalogue parsed zero offers; parser may be stale."), pages_processed=pages if 'pages' in locals() else 0)
         warning = (f"Catalogue intentionally limited to {self.page_limit} pages.",) if self.page_limit is not None and self.page_limit < pages else ()
         return ScrapeResult(tuple(unique.values()), warnings=warning, pages_processed=count)
+
+    def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
+        """Public Doctorhead header form: GET /search/?q=… ."""
+        if query.is_empty():
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+        try:
+            html = self._fetch(f"{self.base_url}/search/?{urlencode({'q': query.text()})}")
+            if self._is_blocked(html):
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Dr.Head returned a CAPTCHA/access-check page.",))
+            return StoreSearchResult(self.source, tuple(self.parse_listing(html)))
+        except (HTTPError, URLError, OSError) as error:
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Dr.Head public search unavailable ({getattr(error, 'code', type(error).__name__)}).",))
 
     def enrich_offer(self, offer: RawOffer) -> RawOffer:
         return self.parse_product_page(self._fetch(offer.url), offer)

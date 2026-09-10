@@ -1,7 +1,7 @@
 from decimal import Decimal
 from pathlib import Path
 from vinyl_deals.adapters.imagine_club import ImagineClubAdapter
-from vinyl_deals.domain import Availability
+from vinyl_deals.domain import Availability, StoreSearchQuery
 
 def test_parses_listing_fixture_without_network() -> None:
     html = Path("tests/fixtures/imagine_club/listing.html").read_text(encoding="utf-8"); adapter = ImagineClubAdapter(); offers = adapter.parse_listing(html)
@@ -33,3 +33,12 @@ def test_catalog_reports_current_page_and_remaining_work() -> None:
         "Imagine Club: страницы 1/2, осталось 1",
         "Imagine Club: страницы 2/2, осталось 0",
     ]
+
+
+def test_targeted_search_uses_verified_drupal_endpoint(monkeypatch) -> None:
+    adapter = ImagineClubAdapter()
+    html = Path("tests/fixtures/imagine_club/listing.html").read_text(encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(adapter, "_fetch", lambda url: calls.append(url) or html)
+    result = adapter.search_offers(StoreSearchQuery(artist="10 cc", title="Bloody Tourists"))
+    assert result.offers and calls == ["https://imagine-club.com/search?search_api_views_fulltext=10+cc+Bloody+Tourists"]

@@ -12,11 +12,11 @@ from html import unescape
 import re
 from time import sleep
 from urllib.error import HTTPError
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
-from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
+from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
 
 
 class ImagineClubAdapter(BaseStoreAdapter):
@@ -58,6 +58,19 @@ class ImagineClubAdapter(BaseStoreAdapter):
         # Product ids are stable only in listing HTML. Callers should retain
         # the listing URL and use parse_product_page for detail enrichment.
         return None
+
+    def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
+        """Drupal Search API form from the public site header."""
+        if query.is_empty():
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+        url = f"{self.base_url}/search?{urlencode({'search_api_views_fulltext': query.text()})}"
+        try:
+            html = self._fetch(url)
+            if any(marker in html.casefold() for marker in ("captcha", "access-check", "проверка безопасности")):
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Imagine Club returned a CAPTCHA/access-check page.",))
+            return StoreSearchResult(self.source, tuple(self.parse_listing(html)))
+        except HTTPError as error:
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Imagine Club returned HTTP {error.code}.",))
 
     def enrich_offer(self, offer: RawOffer) -> RawOffer:
         return self.parse_product_page(self._fetch(offer.url), offer)

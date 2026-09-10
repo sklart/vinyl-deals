@@ -8,6 +8,7 @@ from vinyl_deals.domain import Availability, StoreSearchQuery
 class _Adapter(PublicHtmlVinylAdapter):
     source = "fixture"
     base_url = "https://shop.example"
+    search_path = "/verified-search/"
 
 
 def _json_product(product: str) -> str:
@@ -52,4 +53,12 @@ def test_targeted_search_uses_public_search_page_not_catalogue(monkeypatch):
     monkeypatch.setattr(adapter, "_fetch", lambda url: requested.append(url) or html)
     result = adapter.search_offers(StoreSearchQuery(artist="Opeth", title="Blackwater Park"))
     assert result.state.value == "active" and len(result.offers) == 1
-    assert requested == ["https://shop.example/search/?q=Opeth+Blackwater+Park"]
+    assert requested == ["https://shop.example/verified-search/?q=Opeth+Blackwater+Park"]
+
+
+def test_unconfigured_html_adapter_refuses_unverified_generic_search():
+    class Unconfigured(PublicHtmlVinylAdapter):
+        source = "unconfigured"; base_url = "https://shop.example"
+    result = Unconfigured().search_offers(StoreSearchQuery(title="Communique"))
+    assert result.state.value == "degraded"
+    assert "no verified" in result.warnings[0]

@@ -9,11 +9,11 @@ import json
 import re
 from time import sleep
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
-from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
+from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
 
 
 class AudiomaniaAdapter(BaseStoreAdapter):
@@ -96,6 +96,23 @@ class AudiomaniaAdapter(BaseStoreAdapter):
                 values[name] = value
         values["raw_data"] = {**offer.raw_data, **detailed.raw_data, "public_card": True}
         return RawOffer(**values)
+
+    def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
+        """Audiomania's public header form: GET /search/?sq=… ."""
+        if query.is_empty():
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+        try:
+            html = self._fetch(f"{self.base_url}/search/?{urlencode({'sq': query.text()})}")
+            if self._is_blocked(html):
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Audiomania returned a CAPTCHA/access-check page.",))
+            offers = []
+            for url in self._product_urls(html)[: self.page_limit or 20]:
+                product = self.parse_public_product_page(self._fetch(url), url)
+                if product:
+                    offers.append(product)
+            return StoreSearchResult(self.source, tuple(offers))
+        except (HTTPError, URLError, OSError) as error:
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Audiomania public search unavailable ({getattr(error, 'code', type(error).__name__)}).",))
 
     def parse_public_product_page(self, html: str, url: str, *, fetched_at: datetime | None = None) -> RawOffer | None:
         """Parse the documented server-rendered music-record product layout."""
