@@ -91,15 +91,15 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
 
     @staticmethod
     def _matching_search_cards(offers: list[RawOffer], query: StoreSearchQuery) -> list[RawOffer]:
-        """Reject broad search suggestions that do not contain requested terms."""
-        needle = re.sub(r"\W+", "", query.barcode or query.catalog_number or "")
+        """Reject only broad textual suggestions before detail enrichment.
+
+        Search listings commonly omit GTIN and catalogue number.  Identifier
+        validation belongs after the selected cards have been enriched.
+        """
         terms = [term.casefold() for term in (query.artist, query.title) if term]
         filtered: list[RawOffer] = []
         for offer in offers:
             haystack = " ".join(value or "" for value in (offer.artist_raw, offer.title_raw, offer.barcode, offer.catalog_number_raw)).casefold()
-            compact = re.sub(r"\W+", "", haystack)
-            if needle and needle not in compact:
-                continue
             if terms and not all(term in haystack for term in terms):
                 continue
             filtered.append(offer)

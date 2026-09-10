@@ -103,7 +103,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(buttons)
         splitter = QSplitter(Qt.Orientation.Vertical)
         self.release_table = self._table(("Исполнитель", "Альбом", "Label", "Catalog", "Год", "Формат", "Barcode"), "release_table")
-        self.offer_table = self._table(("Магазин", "Цена", "Итоговая цена", "Самовывоз", "Состояние", "Наличие", "Deal"), "offer_table")
+        self.offer_table = self._table(("Магазин", "Цена", "Итоговая цена", "Самовывоз", "Состояние", "Наличие", "Deal %", "Класс"), "offer_table")
         splitter.addWidget(self.release_table)
         splitter.addWidget(self.offer_table)
         splitter.setSizes([280, 320])
@@ -434,7 +434,13 @@ class MainWindow(QMainWindow):
         label = STORE_LABELS.get(source, source)
         offers = int(getattr(result, "offers", 0))
         state = str(getattr(result, "state", "degraded"))
-        self._live_store_status[source] = f"{label}: {'✓ ' + str(offers) if state == 'active' else '⚠ DEGRADED'}"
+        cached = bool(getattr(result, "cached", False))
+        marker = f"↻ cached {offers}" if cached else "✓ " + str(offers) if state == "active" else "⚠ DEGRADED"
+        self._live_store_status[source] = f"{label}: {marker}"
+        releases = tuple(getattr(result, "releases", ()))
+        if releases:
+            self.results = list(releases)
+            self._render_search_results()
         self.status_label.setText("Поиск во всех магазинах:\n" + "\n".join(self._live_store_status.values()))
 
     def _live_search_completed(self, result: object) -> None:
@@ -490,7 +496,8 @@ class MainWindow(QMainWindow):
             store = f"📍 {offer.store}" if offer.local_store else offer.store
             effective = f"{offer.effective_price} RUB" if offer.effective_price_known and offer.effective_price is not None else "?"
             pickup = "Да" if offer.pickup_available else "Нет"
-            values = (store, f"{offer.price} RUB" if offer.price is not None else "-", effective, pickup, offer.condition or "UNKNOWN", availability, offer.deal_class.value if offer.deal_class else "-")
+            discount = f"{offer.discount_pct:.0f}%" if offer.discount_pct is not None else "-"
+            values = (store, f"{offer.price} RUB" if offer.price is not None else "-", effective, pickup, offer.condition or "UNKNOWN", availability, discount, offer.deal_class.value if offer.deal_class else "-")
             names = highlights.get(offer.offer_id, [])
             color = QColor("#fff3bf") if "Lowest price" in names else QColor("#d3f9d8") if "Best effective" in names or "Best new" in names else QColor("#d0ebff")
             for column, value in enumerate(values):

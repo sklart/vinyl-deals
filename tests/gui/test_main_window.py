@@ -154,7 +154,7 @@ def test_live_search_reports_store_progress_and_renders_partial_result(qapp, tmp
     started, release_worker = Event(), Event()
     item = release()
     def live_service(_repository, query, *, progress):
-        progress(LiveStoreResult("Imagine Club", StoreState.ACTIVE, 3))
+        progress(LiveStoreResult("Imagine Club", StoreState.ACTIVE, 3, releases=(item,)))
         started.set(); release_worker.wait(1)
         return LiveSearchResult(query, (item,), (LiveStoreResult("Imagine Club", StoreState.ACTIVE, 3),))
     window = MainWindow(tmp_path / "live.sqlite3", live_search_service=live_service)
@@ -164,6 +164,7 @@ def test_live_search_reports_store_progress_and_renders_partial_result(qapp, tmp
     assert wait_until(qapp, started.is_set)
     assert "Imagine Club: ✓ 3" in window.status_label.text()
     assert not window.search_button.isEnabled()
+    assert window.release_table.rowCount() == 1
     release_worker.set()
     assert wait_until(qapp, lambda: window.search_button.isEnabled())
     assert window.release_table.rowCount() == 1

@@ -23,6 +23,7 @@ class LiveStoreResult:
     warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     cached: bool = False
+    releases: tuple[ReleaseSearchResult, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +35,18 @@ class LiveSearchResult:
 
 
 ProgressCallback = Callable[[LiveStoreResult], None]
+
+
+def _materialize(repository: SQLiteRepository, discovered: list[RawOffer], query: StoreSearchQuery) -> tuple[ReleaseSearchResult, ...]:
+    """Persist a completed batch and expose its grouping immediately."""
+    unique = {(offer.source, offer.source_product_id): offer for offer in discovered}
+    for offer in unique.values():
+        repository.upsert_offer(offer)
+    build_match_queue(repository)
+    searched_ids = [offer_id for offer_id, offer in repository.offers_for_matching() if (offer.source, offer.source_product_id) in unique]
+    repository.ensure_releases_for_unmatched_offers(searched_ids)
+    releases = search_releases(repository, artist=query.artist, title=query.title, barcode=query.barcode, catalog=query.catalog_number, now=datetime.now(timezone.utc))
+    return tuple(sorted(releases, key=lambda release: (release.artist.casefold(), release.title.casefold(), release.release_id)))
 
 
 def _cached_offers(repository: SQLiteRepository, source: str, query: StoreSearchQuery) -> tuple[RawOffer, ...]:
@@ -70,7 +83,23 @@ def _search_store(adapter: object, query: StoreSearchQuery, enrichment_limit: in
         except Exception as error:  # A broken card must not discard a store.
             offers.append(offer)
             warnings.append(f"detail enrichment failed for {offer.source_product_id}: {type(error).__name__}")
-    return StoreSearchResult(result.source, tuple(offers), result.state, tuple(warnings), result.errors)
+    return StoreSearchResult(result.source, tuple(_validated_identifiers(offers, query)), result.state, tuple(warnings), result.errors)
+
+
+def _validated_identifiers(offers: list[RawOffer], query: StoreSearchQuery) -> list[RawOffer]:
+    """Use enriched identifiers as a high-confidence exclusion, not a prerequisite."""
+    wanted_barcode = normalize_barcode(query.barcode) if query.barcode else None
+    wanted_catalog = catalog_number(query.catalog_number) if query.catalog_number else ""
+    accepted: list[RawOffer] = []
+    for offer in offers:
+        actual_barcode = normalize_barcode(offer.barcode)
+        actual_catalog = catalog_number(offer.catalog_number_raw)
+        if wanted_barcode and actual_barcode and actual_barcode != wanted_barcode:
+            continue
+        if wanted_catalog and actual_catalog and wanted_catalog not in actual_catalog:
+            continue
+        accepted.append(offer)
+    return accepted
 
 
 def live_search(
@@ -117,6 +146,8 @@ def live_search(
                     item = LiveStoreResult(source, result.state, len(result.offers), result.warnings, result.errors)
                 except Exception as error:
                     item = LiveStoreResult(source, StoreState.DEGRADED, 0, errors=(f"live search failed: {type(error).__name__}",))
+                if item.state == StoreState.ACTIVE:
+                    item = LiveStoreResult(item.source, item.state, item.offers, item.warnings, item.errors, item.cached, _materialize(repository, discovered, query))
                 reports[source] = item
                 callback(item)
             now = monotonic()
@@ -149,25 +180,12 @@ def live_search(
                 item = LiveStoreResult(source, item.state, len(cached), item.warnings, item.errors, cached=True)
                 reports[source] = item
                 callback(item)
-    # Stable source identifiers de-duplicate overlapping search suggestions.
+    releases = _materialize(repository, discovered, query)
     unique = {(offer.source, offer.source_product_id): offer for offer in discovered}
-    for offer in unique.values():
-        repository.upsert_offer(offer)
-    build_match_queue(repository)
     searched_ids = [offer_id for offer_id, offer in repository.offers_for_matching() if (offer.source, offer.source_product_id) in unique]
     searched_id_set = set(searched_ids)
     possible = tuple(
         row for row in repository.possible_matches()
         if row[0] in searched_id_set or row[1] in searched_id_set
     )
-    repository.ensure_releases_for_unmatched_offers(searched_ids)
-    releases = search_releases(
-        repository,
-        artist=query.artist,
-        title=query.title,
-        barcode=query.barcode,
-        catalog=query.catalog_number,
-        now=datetime.now(timezone.utc),
-    )
-    ordered = tuple(sorted(releases, key=lambda release: (release.artist.casefold(), release.title.casefold(), release.release_id)))
-    return LiveSearchResult(query, ordered, tuple(reports.get(source, LiveStoreResult(source, StoreState.DEGRADED, 0)) for source in factories), possible)
+    return LiveSearchResult(query, releases, tuple(reports.get(source, LiveStoreResult(source, StoreState.DEGRADED, 0)) for source in factories), possible)

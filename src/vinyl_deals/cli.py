@@ -181,9 +181,15 @@ def main() -> int:
         if not result.releases:
             print("No releases found.")
             return 0
+        repository = SQLiteRepository(args.database)
+        from vinyl_deals.pricing import evaluate_offer
         for release in result.releases:
             best = release.lowest_price_offer
             print(f"{release.artist} — {release.title}\nLowest price: {best.store} — {best.price} RUB" if best else f"{release.artist} — {release.title}\nLowest price: unavailable")
+            for offer in release.offers:
+                deal = evaluate_offer(repository, offer.offer_id)
+                market = f", median {deal.market_median} RUB, comps {deal.comparable_count}, {deal.discount_pct:.0f}% {deal.deal_class}" if deal and deal.market_median is not None and deal.discount_pct is not None else ""
+                print(f"  {offer.store}: {offer.price} RUB, effective {offer.effective_price if offer.effective_price_known else '?'}{market}")
         return 0
     factories = {"vinyl_ru": VinylRuAdapter, "rio_rostov": RioRostovAdapter, "droog_rostov": DroogRostovAdapter}
     paged_factories = {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter, "audiomania": AudiomaniaAdapter, "respublica": RespublicaAdapter, "drhead": DrHeadAdapter, "vidika": VidikaAdapter, "maximum_vinyl": MaximumVinylAdapter, "vinylmarkt": VinylmarktAdapter, "vernoshop": VernoshopAdapter, "tishina": TishinaAdapter, "avsound": AVSoundAdapter, "pult": PultAdapter, "onlinetrade": OnlineTradeAdapter}
