@@ -2,7 +2,6 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from threading import Event, Timer
 
-from PySide6.QtCore import QSettings
 from PySide6.QtTest import QTest
 
 from vinyl_deals.domain import Availability, RawOffer
@@ -28,8 +27,6 @@ def populated_repository(window):
 
 
 def test_tracking_add_edit_toggle_remove_and_show_alert(qapp, tmp_path):
-    settings = QSettings("VinylDeals", "Desktop")
-    settings.remove("scheduler")
     window = MainWindow(tmp_path / "tracking.sqlite3", search_service=search_releases)
     release_id = populated_repository(window)
     window.fields["artist"].setText("opeth")
@@ -59,8 +56,6 @@ def test_tracking_add_edit_toggle_remove_and_show_alert(qapp, tmp_path):
 
 
 def test_scheduler_controls_are_persisted_in_gui(qapp, tmp_path):
-    settings = QSettings("VinylDeals", "Desktop")
-    settings.remove("scheduler")
     window = MainWindow(tmp_path / "settings.sqlite3")
     assert not window.scheduler_enabled.isChecked()
     window.scheduler_interval.setCurrentText("180")
@@ -70,11 +65,15 @@ def test_scheduler_controls_are_persisted_in_gui(qapp, tmp_path):
     assert window.scheduler.interval_minutes == 180
     assert window.scheduler.auto_send is True
     window.close()
+    assert (tmp_path / "settings.ini").is_file()
+    restored = MainWindow(tmp_path / "settings.sqlite3")
+    assert restored.scheduler_enabled.isChecked()
+    assert restored.scheduler.interval_minutes == 180
+    assert restored.scheduler.auto_send is True
+    restored.close()
 
 
 def test_scheduler_cycle_keeps_gui_controls_disabled_until_finished(qapp, tmp_path):
-    settings = QSettings("VinylDeals", "Desktop")
-    settings.remove("scheduler")
     started, unblock = Event(), Event()
 
     def refresh(*_args, **_kwargs):
@@ -105,8 +104,6 @@ def test_scheduler_cycle_keeps_gui_controls_disabled_until_finished(qapp, tmp_pa
 
 
 def test_close_waits_for_active_manual_refresh_worker(qapp, tmp_path):
-    settings = QSettings("VinylDeals", "Desktop")
-    settings.remove("scheduler")
     started, unblock = Event(), Event()
 
     def refresh(*_args, **_kwargs):
@@ -128,8 +125,6 @@ def test_close_waits_for_active_manual_refresh_worker(qapp, tmp_path):
 
 
 def test_scheduler_and_manual_send_are_mutually_exclusive(qapp, tmp_path, monkeypatch):
-    settings = QSettings("VinylDeals", "Desktop")
-    settings.remove("scheduler")
     started, unblock = Event(), Event()
 
     class Result:
@@ -165,8 +160,6 @@ def test_scheduler_and_manual_send_are_mutually_exclusive(qapp, tmp_path, monkey
 
 
 def test_scheduler_cycle_blocks_manual_send_and_displays_next_check(qapp, tmp_path, monkeypatch):
-    settings = QSettings("VinylDeals", "Desktop")
-    settings.remove("scheduler")
     started, unblock = Event(), Event()
 
     def refresh(*_args, **_kwargs):
@@ -197,8 +190,6 @@ def test_scheduler_cycle_blocks_manual_send_and_displays_next_check(qapp, tmp_pa
 
 
 def test_close_waits_for_active_telegram_worker(qapp, tmp_path, monkeypatch):
-    settings = QSettings("VinylDeals", "Desktop")
-    settings.remove("scheduler")
     started, unblock = Event(), Event()
 
     class Result:
@@ -225,8 +216,6 @@ def test_close_waits_for_active_telegram_worker(qapp, tmp_path, monkeypatch):
 
 
 def test_manual_refresh_blocks_scheduler_cycle(qapp, tmp_path):
-    settings = QSettings("VinylDeals", "Desktop")
-    settings.remove("scheduler")
     started, unblock = Event(), Event()
 
     def refresh(*_args, **_kwargs):

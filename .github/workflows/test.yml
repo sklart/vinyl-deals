@@ -30,13 +30,17 @@ jobs:
       - run: python -m pip install --upgrade pip pyinstaller
       - run: python -m pip install .
       - run: python tools/build_windows.py
-      - run: .\dist\vinyl-deals-gui\vinyl-deals-gui.exe --smoke-test
       - shell: pwsh
         run: |
-          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "vinyl-deals-cli-smoke"
-          & .\dist\vinyl-deals\vinyl-deals.exe doctor
-          if (!(Test-Path (Join-Path $env:LOCALAPPDATA "VinylDeals\vinyl_deals.sqlite3"))) { throw "CLI did not create SQLite database" }
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "must-remain-empty"
+          $portable = Join-Path $env:RUNNER_TEMP "moved-VinylDeals"
+          Copy-Item .\dist\VinylDeals $portable -Recurse
+          & "$portable\vinyl-deals-gui.exe" --smoke-test
+          & "$portable\vinyl-deals.exe" doctor
+          if (!(Test-Path "$portable\data\vinyl_deals.sqlite3")) { throw "CLI did not create portable SQLite database" }
+          if (!(Test-Path "$portable\data\settings.ini")) { throw "GUI settings.ini was not created" }
+          if (Test-Path (Join-Path $env:LOCALAPPDATA "VinylDeals")) { throw "Portable build used LOCALAPPDATA" }
       - uses: actions/upload-artifact@v4
         with:
-          name: vinyl-deals-windows
-          path: dist/
+          name: VinylDeals-portable
+          path: dist/VinylDeals-portable.zip

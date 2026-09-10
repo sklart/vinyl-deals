@@ -18,16 +18,30 @@ from vinyl_deals.database.repository import SQLiteRepository
 
 APP_NAME = "VinylDeals"
 DATABASE_NAME = "vinyl_deals.sqlite3"
+SETTINGS_NAME = "settings.ini"
 
 
-def app_data_dir(environ: dict[str, str] | None = None) -> Path:
+def portable_root(environ: dict[str, str] | None = None) -> Path:
+    """Folder carrying the executable and all portable user data."""
     env = environ if environ is not None else os.environ
-    root = env.get("LOCALAPPDATA")
-    return Path(root) / APP_NAME if root else Path.home() / "AppData" / "Local" / APP_NAME
+    override = env.get("VINYL_DEALS_PORTABLE_ROOT")
+    if override:
+        return Path(override).resolve()
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path.cwd().resolve()
+
+
+def portable_data_dir(environ: dict[str, str] | None = None) -> Path:
+    return portable_root(environ) / "data"
 
 
 def application_database_path(environ: dict[str, str] | None = None) -> Path:
-    return app_data_dir(environ) / DATABASE_NAME
+    return portable_data_dir(environ) / DATABASE_NAME
+
+
+def settings_path(database: Path | None = None, environ: dict[str, str] | None = None) -> Path:
+    return (database.parent if database is not None else portable_data_dir(environ)) / SETTINGS_NAME
 
 
 def resource_path(name: str) -> Path:
@@ -39,7 +53,7 @@ def resource_path(name: str) -> Path:
 
 
 def migrate_legacy_database(target: Path, candidates: tuple[Path, ...] = ()) -> bool:
-    """Copy, never move, a prior local database if app-data has none yet."""
+    """Copy, never move, a prior database beside the portable program."""
     if target.exists():
         return False
     for candidate in candidates:
@@ -51,20 +65,22 @@ def migrate_legacy_database(target: Path, candidates: tuple[Path, ...] = ()) -> 
 
 
 def prepare_application_data(*, legacy_candidates: tuple[Path, ...] = (), environ: dict[str, str] | None = None) -> Path:
-    directory = app_data_dir(environ)
+    directory = portable_data_dir(environ)
     directory.mkdir(parents=True, exist_ok=True)
     logs = directory / "logs"
     logs.mkdir(exist_ok=True)
     database = directory / DATABASE_NAME
     migrate_legacy_database(database, legacy_candidates)
+    settings_path(database).touch(exist_ok=True)
     # Verifies writability and applies all SQLite migrations before a window is shown.
     SQLiteRepository(database).initialize()
     return database
 
 
 def bootstrap_application_data() -> Path:
-    """Shared GUI/CLI bootstrap for app-data, legacy copy and migrations."""
-    return prepare_application_data(legacy_candidates=(Path.cwd() / DATABASE_NAME, Path(sys.executable).resolve().parent / DATABASE_NAME))
+    """Shared GUI/CLI portable bootstrap without LOCALAPPDATA imports."""
+    root = portable_root()
+    return prepare_application_data(legacy_candidates=(root / DATABASE_NAME,))
 
 
 class _SecretFilter(logging.Filter):
@@ -87,7 +103,7 @@ class _RedactingFormatter(logging.Formatter):
 
 
 def configure_logging(directory: Path | None = None, *, max_bytes: int = 1_000_000, backup_count: int = 5) -> logging.Logger:
-    logs = (directory or app_data_dir()) / "logs"
+    logs = (directory or portable_data_dir()) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("vinyl_deals")
     logger.setLevel(logging.INFO)

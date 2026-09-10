@@ -14,8 +14,8 @@ def main(argv: list[str] | None = None) -> int:
     arguments = argv if argv is not None else sys.argv
     try:
         database = bootstrap_application_data()
-    except Exception as error:
-        QMessageBox.critical(None, "Vinyl Deals", "Не удалось подготовить пользовательские данные. Проверьте доступ к LocalAppData.")
+    except Exception:
+        QMessageBox.critical(None, "Vinyl Deals", "Не удалось подготовить папку данных portable-сборки. Проверьте доступ к папке программы.")
         return 2
     logger = configure_logging(database.parent)
     if "--smoke-test" in arguments:

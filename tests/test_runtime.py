@@ -4,28 +4,43 @@ from vinyl_deals import autostart
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.runtime import (
     SingleInstanceLock,
-    app_data_dir,
     application_database_path,
+    bootstrap_application_data,
     configure_logging,
     install_exception_hook,
+    portable_data_dir,
+    portable_root,
     prepare_application_data,
     resource_path,
 )
 
 
-def test_app_data_path_uses_localappdata(tmp_path):
-    environment = {"LOCALAPPDATA": str(tmp_path / "local")}
-    assert app_data_dir(environment) == tmp_path / "local" / "VinylDeals"
-    assert application_database_path(environment) == tmp_path / "local" / "VinylDeals" / "vinyl_deals.sqlite3"
+def test_portable_paths_ignore_localappdata(tmp_path):
+    environment = {"VINYL_DEALS_PORTABLE_ROOT": str(tmp_path / "VinylDeals"), "LOCALAPPDATA": str(tmp_path / "must-not-use")}
+    assert portable_root(environment) == tmp_path / "VinylDeals"
+    assert portable_data_dir(environment) == tmp_path / "VinylDeals" / "data"
+    assert application_database_path(environment) == tmp_path / "VinylDeals" / "data" / "vinyl_deals.sqlite3"
 
 
 def test_prepare_data_copies_and_migrates_legacy_database(tmp_path):
     legacy = tmp_path / "legacy.sqlite3"
     SQLiteRepository(legacy).initialize()
-    database = prepare_application_data(legacy_candidates=(legacy,), environ={"LOCALAPPDATA": str(tmp_path / "local")})
+    database = prepare_application_data(legacy_candidates=(legacy,), environ={"VINYL_DEALS_PORTABLE_ROOT": str(tmp_path / "portable")})
     assert database.exists()
     assert SQLiteRepository(database).schema_version() == SQLiteRepository(legacy).schema_version()
     assert legacy.exists()
+    assert (database.parent / "settings.ini").is_file()
+
+
+def test_bootstrap_copies_only_database_beside_portable_root(tmp_path, monkeypatch):
+    root = tmp_path / "VinylDeals"
+    root.mkdir()
+    legacy = root / "vinyl_deals.sqlite3"
+    SQLiteRepository(legacy).initialize()
+    monkeypatch.setenv("VINYL_DEALS_PORTABLE_ROOT", str(root))
+    database = bootstrap_application_data()
+    assert database == root / "data" / "vinyl_deals.sqlite3"
+    assert database.exists() and legacy.exists()
 
 
 def test_single_instance_lock_and_stale_recovery(tmp_path):

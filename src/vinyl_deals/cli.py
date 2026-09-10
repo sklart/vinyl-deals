@@ -11,8 +11,8 @@ from vinyl_deals.runtime import bootstrap_application_data
 def main() -> int:
     try:
         default_database = bootstrap_application_data()
-    except Exception as error:
-        print("Cannot prepare VinylDeals application data. Check access to LOCALAPPDATA.")
+    except Exception:
+        print("Cannot prepare portable VinylDeals data folder. Check access to the program folder.")
         return 2
     parser = argparse.ArgumentParser(prog="vinyl-deals"); commands = parser.add_subparsers(dest="command", required=True)
     scrape = commands.add_parser("scrape", help="Fetch a public store catalogue"); scrape.add_argument("source", choices=["vinyl_ru", "imagine_club", "collectomania", "rio_rostov", "audiomania", "respublica", "drhead", "droog_rostov"]); scrape.add_argument("--database", type=Path, default=default_database); scrape.add_argument("--page-limit", type=int, help="Temporary safe bound for a paginated source"); scrape.add_argument("--enrich", action="store_true", help="Fetch public product details for listed offers")

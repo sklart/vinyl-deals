@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 *.sqlite3
+data/
 .venv/
 dist/
 build/

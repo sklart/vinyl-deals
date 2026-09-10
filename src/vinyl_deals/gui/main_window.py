@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -31,9 +30,8 @@ from PySide6.QtWidgets import (
 )
 
 from vinyl_deals.database.repository import SQLiteRepository
-from vinyl_deals import autostart
 from vinyl_deals.build_metadata import metadata as build_metadata
-from vinyl_deals.runtime import application_database_path
+from vinyl_deals.runtime import application_database_path, settings_path
 from vinyl_deals.scheduler import ALLOWED_INTERVALS, Scheduler
 from vinyl_deals.search import ReleaseSearchResult, search_releases
 from vinyl_deals.updates import refresh_catalogs
@@ -46,7 +44,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self, database: Path | str | None = None, *, search_service: Callable = search_releases, update_service: Callable = refresh_catalogs, url_opener: Callable[[QUrl], bool] = QDesktopServices.openUrl, scheduler_factory: Callable = Scheduler) -> None:
         super().__init__()
-        self.repository = SQLiteRepository(database or application_database_path())
+        database_path = Path(database) if database is not None else application_database_path()
+        self.repository = SQLiteRepository(database_path)
+        self.settings = QSettings(str(settings_path(database_path)), QSettings.Format.IniFormat)
         self.search_service = search_service
         self.update_service = update_service
         self.url_opener = url_opener
@@ -136,9 +136,8 @@ class MainWindow(QMainWindow):
         self.scheduler_enabled = QCheckBox("Автопроверка")
         self.scheduler_interval = QComboBox(); self.scheduler_interval.addItems([str(value) for value in ALLOWED_INTERVALS])
         self.scheduler_auto_send = QCheckBox("Автоотправка Telegram")
-        self.autostart_enabled = QCheckBox("Автозапуск Windows")
-        self.autostart_enabled.setChecked(autostart.is_enabled())
-        self.autostart_enabled.setEnabled(os.name == "nt")
+        self.autostart_enabled = QCheckBox("Автозапуск Windows (не поддерживается portable-сборкой)")
+        self.autostart_enabled.setVisible(False)
         self.scheduler_run_button = QPushButton("Проверить сейчас")
         for widget in (self.scheduler_enabled, QLabel("Интервал (мин):"), self.scheduler_interval, self.scheduler_auto_send, self.autostart_enabled, self.scheduler_run_button): scheduler_controls.addWidget(widget)
         scheduler_controls.addStretch(); layout.addLayout(scheduler_controls)
@@ -155,7 +154,6 @@ class MainWindow(QMainWindow):
         self.scheduler_enabled.toggled.connect(self.save_scheduler_settings)
         self.scheduler_interval.currentTextChanged.connect(self.save_scheduler_settings)
         self.scheduler_auto_send.toggled.connect(self.save_scheduler_settings)
-        self.autostart_enabled.toggled.connect(self.save_autostart)
         self.scheduler_run_button.clicked.connect(self.run_scheduler_cycle)
         self.alert_table.itemSelectionChanged.connect(self._update_alert_actions)
         self.alert_open_store_button.clicked.connect(self.open_alert_store)
@@ -262,25 +260,26 @@ class MainWindow(QMainWindow):
         if (payload := self._selected_alert_payload()) and payload.get("discogs_url"): self.url_opener(QUrl(str(payload["discogs_url"])))
 
     def _restore_scheduler(self) -> None:
-        settings = QSettings("VinylDeals", "Desktop"); enabled = settings.value("scheduler/enabled", False, type=bool); interval = settings.value("scheduler/interval", 60, type=int); interval = interval if interval in ALLOWED_INTERVALS else 60
-        self.scheduler_enabled.setChecked(enabled); self.scheduler_interval.setCurrentText(str(interval)); self.scheduler_auto_send.setChecked(settings.value("scheduler/auto_send", False, type=bool)); self.scheduler.configure(enabled=enabled, interval_minutes=interval, auto_send=self.scheduler_auto_send.isChecked())
+        settings = self.settings; enabled = settings.value("scheduler/enabled", False, type=bool); interval = settings.value("scheduler/interval", 60, type=int); interval = interval if interval in ALLOWED_INTERVALS else 60
+        auto_send = settings.value("scheduler/auto_send", False, type=bool)
+        # Do not let each restored widget write a half-restored value back to
+        # the INI file through its change signal.
+        for widget in (self.scheduler_enabled, self.scheduler_interval, self.scheduler_auto_send):
+            widget.blockSignals(True)
+        self.scheduler_enabled.setChecked(enabled)
+        self.scheduler_interval.setCurrentText(str(interval))
+        self.scheduler_auto_send.setChecked(auto_send)
+        for widget in (self.scheduler_enabled, self.scheduler_interval, self.scheduler_auto_send):
+            widget.blockSignals(False)
+        self.scheduler.configure(enabled=enabled, interval_minutes=interval, auto_send=auto_send)
         self.scheduler.status.connect(self.status_label.setText); self.scheduler.cycle_completed.connect(self._scheduler_completed); self.scheduler.cycle_failed.connect(lambda message: self.status_label.setText(f"Ошибка проверки: {message}")); self.scheduler.running_changed.connect(self._set_updating)
 
     def save_scheduler_settings(self) -> None:
         if not hasattr(self, "scheduler"): return
         enabled, interval, auto_send = self.scheduler_enabled.isChecked(), int(self.scheduler_interval.currentText()), self.scheduler_auto_send.isChecked()
-        settings = QSettings("VinylDeals", "Desktop"); settings.setValue("scheduler/enabled", enabled); settings.setValue("scheduler/interval", interval); settings.setValue("scheduler/auto_send", auto_send); self.scheduler.configure(enabled=enabled, interval_minutes=interval, auto_send=auto_send)
+        settings = self.settings; settings.setValue("scheduler/enabled", enabled); settings.setValue("scheduler/interval", interval); settings.setValue("scheduler/auto_send", auto_send); settings.sync(); self.scheduler.configure(enabled=enabled, interval_minutes=interval, auto_send=auto_send)
         if enabled and not self._updating:
             self.status_label.setText(f"Следующая проверка: через {interval} мин.")
-
-    def save_autostart(self, enabled: bool) -> None:
-        try:
-            autostart.set_enabled(enabled)
-        except RuntimeError as error:
-            self.status_label.setText(str(error))
-            self.autostart_enabled.blockSignals(True)
-            self.autostart_enabled.setChecked(False)
-            self.autostart_enabled.blockSignals(False)
 
     def show_about(self) -> None:
         details = build_metadata()
@@ -338,14 +337,15 @@ class MainWindow(QMainWindow):
         return not self._maintenance_busy()
 
     def _restore_window_state(self) -> None:
-        geometry = QSettings("VinylDeals", "Desktop").value("window/geometry")
+        geometry = self.settings.value("window/geometry")
         if geometry:
             self.restoreGeometry(geometry)
         else:
             self.resize(1100, 750)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        QSettings("VinylDeals", "Desktop").setValue("window/geometry", self.saveGeometry())
+        self.settings.setValue("window/geometry", self.saveGeometry())
+        self.settings.sync()
         self._closing = True
         self.scheduler.shutdown()
         if self._worker and self._worker.isRunning():
