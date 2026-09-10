@@ -121,22 +121,35 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
         chunks = re.split(r'<(?=div\b[^>]*class=["\'][^"\']*(?:product-item|product-thumb|catalog-item|product-card)[^"\']*["\'])', html, flags=re.I)[1:]
         offers: list[RawOffer] = []
         for chunk in chunks:
-            block = chunk[:12000]
+            block = self._card_block(chunk)
             href = self._first(r'href=["\']([^"\']+)["\']', block)
             name = self._first(r'(?:itemprop=["\']name["\'][^>]*>|class=["\'][^"\']*(?:name|title)[^"\']*["\'][^>]*>)(.*?)</(?:a|div|span|h[1-6])>', block, re.I | re.S)
             if not name:
                 name = self._first(r'<a[^>]+href=["\'][^"\']+["\'][^>]*>(.*?)</a>', block, re.I | re.S)
             sku = self._first(r'(?:data-(?:product-)?id|itemprop=["\']sku["\'][^>]*content|Артикул)\s*(?:=|:)["\'\s]*([A-Za-z0-9_-]+)', block, re.I)
+            if not sku:
+                # OpenCart themes, including Maximum Vinyl, encode their
+                # stable public product id in a CSS class such as product_42.
+                sku = self._first(r'\bproduct_(\d+)\b', block, re.I)
             price = self._money(self._first(r'(?:itemprop=["\']price["\'][^>]*content|data-price)=["\']([^"\']+)', block, re.I))
             if price is None:
                 price = self._money(self._text(self._first(r'<(?:span|div)[^>]*class=["\'][^"\']*(?:price|cost)[^"\']*["\'][^>]*>(.*?)</(?:span|div)>', block, re.I | re.S)))
-            offer = self._product_from_values(name=self._text(name), url=href, product_id=sku, price=price, availability_value=self._text(block), timestamp=timestamp, raw_data={"html_card": True})
+            # Keep the whole bounded card as classification evidence.  A mixed
+            # catalogue can state the medium in a property row rather than in
+            # the visible title; converting it to text also makes this safe for
+            # adapters that do not need that extra evidence.
+            offer = self._product_from_values(name=self._text(name), url=href, product_id=sku, price=price, availability_value=block, timestamp=timestamp, raw_data={"html_card": True})
             if offer:
                 offers.append(offer)
         return offers
 
     def _product_from_values(self, *, name: str, url: str, product_id: str, price: Decimal | None, availability_value: str, timestamp: datetime, raw_data: dict[str, object], barcode: str | None = None) -> RawOffer | None:
-        if not name or not url or price is None or not self._looks_like_vinyl(name):
+        # URL and bounded product-card properties are useful, independent
+        # evidence for stores with mixed media catalogues.  Availability still
+        # receives the original card below, so this does not broaden the
+        # availability parser.
+        classification_value = " ".join((name, url, self._text(availability_value)))
+        if not name or not url or price is None or not self._looks_like_vinyl(classification_value):
             return None
         absolute_url = urljoin(self.base_url, url)
         stable_id = product_id or sha256(absolute_url.encode("utf-8")).hexdigest()[:20]
@@ -173,7 +186,26 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
 
     @staticmethod
     def _text(value: str) -> str:
-        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", unescape(value))).strip()
+        # Tags are separators, not empty strings: otherwise a property value
+        # such as ``<td>LP</td>`` can be glued to its label and miss a word
+        # boundary during media classification.
+        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", unescape(value))).strip()
+
+    @staticmethod
+    def _card_block(chunk: str) -> str:
+        """Return one outer product div without leaking into its neighbour."""
+        opening_end = chunk.find(">")
+        if opening_end < 0:
+            return chunk[:12000]
+        depth = 1
+        for tag in re.finditer(r"</?div\b[^>]*>", chunk[opening_end + 1:], re.I):
+            if tag.group().startswith("</"):
+                depth -= 1
+                if depth == 0:
+                    return chunk[:opening_end + 1 + tag.end()]
+            else:
+                depth += 1
+        return chunk[:12000]
 
     @staticmethod
     def _money(value: str) -> Decimal | None:

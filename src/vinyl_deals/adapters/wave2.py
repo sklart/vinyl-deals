@@ -15,6 +15,29 @@ class VidikaAdapter(PublicHtmlVinylAdapter):
     catalog_urls = ("https://vidika.su/category/zarubezhnyy-vinil/", "https://vidika.su/category/russkiy-vinil/")
     def _page_url(self, page, **_kwargs): return f"{self.catalog_url}?page={page}"
 
+    def _html_cards(self, html, timestamp):
+        """Parse Vidika's public Webasyst ``products__item`` cards.
+
+        This is deliberately separate from the generic theme fallback: the
+        real category does not expose ``product-item`` classes and has nested
+        containers, while every card carries an immutable product_id, a
+        current-price block and an explicit availability marker.
+        """
+        offers = []
+        for block in re.split(r'<div\s+class=["\']products__item["\']\s*>', html, flags=re.I)[1:]:
+            url = self._first(r'(?:data-href|<a\s+href)=["\']([^"\']+)', block, re.I)
+            name = self._first(r'products__item-info-name["\'][^>]*>(.*?)</span>', block, re.I | re.S)
+            product_id = self._first(r'name=["\']product_id["\']\s+value=["\'](\d+)', block, re.I)
+            price = self._money(self._first(r'products__pr-price-new.*?<span\s+class=["\']price["\']>(.*?)</span>', block, re.I | re.S))
+            offer = self._product_from_values(
+                name=self._text(name), url=url, product_id=product_id, price=price,
+                availability_value=block, timestamp=timestamp,
+                raw_data={"html_card": True, "vidika_products_item": True},
+            )
+            if offer:
+                offers.append(offer)
+        return offers
+
     def get_catalog(self):
         original, offers, processed = self.catalog_url, [], 0
         try:
@@ -62,9 +85,15 @@ class OnlineTradeAdapter(PublicHtmlVinylAdapter):
     @staticmethod
     def _looks_like_vinyl(value: str) -> bool:
         lowered = value.casefold()
-        if re.search(r"(?:\bcd\b|audio cd|sacd|dvd|blu-ray|кассет)", lowered) and not re.search(r"(?:виниловая\s+пластинка|\blp\b)", lowered):
+        # DVD/Blu-ray/cassette are never a vinyl release.  CD/SACD is allowed
+        # only for an explicitly confirmed hybrid such as LP+CD.
+        if re.search(r"(?:\bdvd\b|blu[- ]?ray|кассет)", lowered):
             return False
-        return bool(re.search(r"(?:виниловая\s+пластинка|\blp\b|\b\d+lp\b)", lowered))
+        has_lp = bool(re.search(r"(?:\blp\b|\b\d+lp\b)", lowered))
+        has_vinyl_product = bool(re.search(r"(?:виниловая\s+пластинка|vinilovaya_plastinka)", lowered))
+        if re.search(r"(?:\bcd\b|audio cd|sacd)", lowered):
+            return has_lp
+        return has_vinyl_product or has_lp
 
 
 class PultAdapter(PublicHtmlVinylAdapter):

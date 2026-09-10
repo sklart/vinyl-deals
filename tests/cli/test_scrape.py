@@ -70,6 +70,7 @@ def test_scrape_passes_page_limit_to_audiomania(tmp_path, monkeypatch, capsys):
     ("vidika", "VidikaAdapter"), ("maximum_vinyl", "MaximumVinylAdapter"),
     ("vinylmarkt", "VinylmarktAdapter"), ("vernoshop", "VernoshopAdapter"),
     ("tishina", "TishinaAdapter"), ("avsound", "AVSoundAdapter"), ("pult", "PultAdapter"),
+    ("onlinetrade", "OnlineTradeAdapter"),
 ])
 def test_scrape_passes_page_limit_to_wave2_adapters(tmp_path, monkeypatch, capsys, source, adapter_name):
     monkeypatch.setattr(cli, adapter_name, _PageLimitedAdapter)

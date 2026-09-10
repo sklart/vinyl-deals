@@ -31,7 +31,7 @@ def main() -> int:
     if args.command == "doctor":
         repository = SQLiteRepository(default_database)
         runs = repository.latest_scrape_runs()
-        adapters = "vinyl_ru, imagine_club, collectomania, rio_rostov, audiomania, respublica, drhead, vidika, maximum_vinyl, vinylmarkt, vernoshop, tishina, avsound; pult (public access restricted), droog_rostov (public profile only)"
+        adapters = "vinyl_ru, imagine_club, collectomania, rio_rostov, audiomania, respublica, drhead, vidika, maximum_vinyl, vinylmarkt, vernoshop, tishina, avsound, onlinetrade; pult (public access restricted), droog_rostov (public profile only)"
         print(f"OK: SQLite schema v{repository.schema_version()}; adapters: {adapters}.")
         if runs:
             print("Latest scrape runs:")
