@@ -8,6 +8,11 @@ from PySide6.QtCore import QSettings, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -16,6 +21,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QSplitter,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -23,16 +29,17 @@ from PySide6.QtWidgets import (
 )
 
 from vinyl_deals.database.repository import SQLiteRepository
+from vinyl_deals.scheduler import ALLOWED_INTERVALS, Scheduler
 from vinyl_deals.search import ReleaseSearchResult, search_releases
 from vinyl_deals.updates import refresh_catalogs
 
-from .workers import UpdateWorker
+from .workers import TaskWorker, UpdateWorker
 
 
 class MainWindow(QMainWindow):
     """Native Qt shell that delegates search and updates to application services."""
 
-    def __init__(self, database: Path | str = "vinyl_deals.sqlite3", *, search_service: Callable = search_releases, update_service: Callable = refresh_catalogs, url_opener: Callable[[QUrl], bool] = QDesktopServices.openUrl) -> None:
+    def __init__(self, database: Path | str = "vinyl_deals.sqlite3", *, search_service: Callable = search_releases, update_service: Callable = refresh_catalogs, url_opener: Callable[[QUrl], bool] = QDesktopServices.openUrl, scheduler_factory: Callable = Scheduler) -> None:
         super().__init__()
         self.repository = SQLiteRepository(database)
         self.search_service = search_service
@@ -43,9 +50,11 @@ class MainWindow(QMainWindow):
         self._worker: UpdateWorker | None = None
         self._search_performed = False
         self._updating = False
+        self.scheduler = scheduler_factory(self.repository, refresh_service=update_service, parent=self)
         self.setWindowTitle("Vinyl Deals Russia")
         self._build_ui()
         self._restore_window_state()
+        self._restore_scheduler()
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -87,7 +96,11 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("Введите реквизиты пластинки и нажмите «Найти».")
         self.status_label.setObjectName("status_label")
         layout.addWidget(self.status_label)
-        self.setCentralWidget(root)
+        self.search_page = root
+        self.tabs = QTabWidget()
+        self.tabs.addTab(root, "Поиск")
+        self.tabs.addTab(self._build_tracking_page(), "Отслеживание")
+        self.setCentralWidget(self.tabs)
         self.search_button.clicked.connect(self.perform_search)
         self.clear_button.clicked.connect(self.clear_search)
         self.refresh_button.clicked.connect(self.start_refresh)
@@ -96,6 +109,46 @@ class MainWindow(QMainWindow):
         self.offer_table.itemDoubleClicked.connect(lambda _: self.open_selected_offer())
         self.open_store_button.clicked.connect(self.open_selected_offer)
         self.open_discogs_button.clicked.connect(self.open_discogs)
+
+    def _build_tracking_page(self) -> QWidget:
+        page = QWidget(); layout = QVBoxLayout(page)
+        controls = QHBoxLayout()
+        self.watch_add_button = QPushButton("Добавить выбранный Release")
+        self.watch_remove_button = QPushButton("Удалить")
+        self.watch_enable_button = QPushButton("Включить / отключить")
+        self.watch_edit_button = QPushButton("Редактировать параметры")
+        self.watch_open_button = QPushButton("Открыть предложения")
+        for button in (self.watch_add_button, self.watch_remove_button, self.watch_enable_button, self.watch_edit_button, self.watch_open_button): controls.addWidget(button)
+        layout.addLayout(controls)
+        self.watch_table = self._table(("Исполнитель", "Альбом", "Вкл.", "Макс. цена", "Min deal", "Local", "Город", "Самовывоз", "Последний alert"), "watch_table")
+        layout.addWidget(self.watch_table, 1)
+        scheduler_controls = QHBoxLayout()
+        self.scheduler_enabled = QCheckBox("Автопроверка")
+        self.scheduler_interval = QComboBox(); self.scheduler_interval.addItems([str(value) for value in ALLOWED_INTERVALS])
+        self.scheduler_auto_send = QCheckBox("Автоотправка Telegram")
+        self.scheduler_run_button = QPushButton("Проверить сейчас")
+        for widget in (self.scheduler_enabled, QLabel("Интервал (мин):"), self.scheduler_interval, self.scheduler_auto_send, self.scheduler_run_button): scheduler_controls.addWidget(widget)
+        scheduler_controls.addStretch(); layout.addLayout(scheduler_controls)
+        alert_controls = QHBoxLayout(); self.alert_open_store_button = QPushButton("Открыть магазин"); self.alert_open_discogs_button = QPushButton("Открыть Discogs"); self.alert_send_button = QPushButton("Отправить pending alerts")
+        for button in (self.alert_open_store_button, self.alert_open_discogs_button, self.alert_send_button): alert_controls.addWidget(button)
+        layout.addLayout(alert_controls)
+        self.alert_table = self._table(("Дата", "Событие", "Релиз", "Магазин", "Цена", "Статус"), "alert_table")
+        layout.addWidget(self.alert_table, 1)
+        self.watch_add_button.clicked.connect(self.add_selected_watch)
+        self.watch_remove_button.clicked.connect(self.remove_selected_watch)
+        self.watch_enable_button.clicked.connect(self.toggle_selected_watch)
+        self.watch_edit_button.clicked.connect(self.edit_selected_watch)
+        self.watch_open_button.clicked.connect(self.open_watch_offers)
+        self.scheduler_enabled.toggled.connect(self.save_scheduler_settings)
+        self.scheduler_interval.currentTextChanged.connect(self.save_scheduler_settings)
+        self.scheduler_auto_send.toggled.connect(self.save_scheduler_settings)
+        self.scheduler_run_button.clicked.connect(self.run_scheduler_cycle)
+        self.alert_table.itemSelectionChanged.connect(self._update_alert_actions)
+        self.alert_open_store_button.clicked.connect(self.open_alert_store)
+        self.alert_open_discogs_button.clicked.connect(self.open_alert_discogs)
+        self.alert_send_button.clicked.connect(self.send_pending_alerts)
+        self.refresh_tracking(); self._update_alert_actions()
+        return page
 
     @staticmethod
     def _table(headers: tuple[str, ...], name: str) -> QTableWidget:
@@ -109,6 +162,124 @@ class MainWindow(QMainWindow):
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         return table
 
+    def refresh_tracking(self) -> None:
+        self.watch_table.setRowCount(0)
+        for entry in self.repository.watchlist_entries():
+            row = self.watch_table.rowCount(); self.watch_table.insertRow(row)
+            values = (entry["artist"], entry["title"], "Да" if entry["enabled"] else "Нет", entry["max_price"] or "", entry["min_deal_class"] or "GOOD", "Да" if entry["local_only"] else "Нет", entry["city"] or "", "Да" if entry["pickup_only"] else "Нет", self._last_alert_text(int(entry["release_id"])))
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value)); item.setData(Qt.ItemDataRole.UserRole, entry["release_id"]); self.watch_table.setItem(row, column, item)
+        self.alert_table.setRowCount(0)
+        for alert in self.repository.alerts():
+            payload = alert["payload"]; row = self.alert_table.rowCount(); self.alert_table.insertRow(row)
+            status = "sent" if alert["sent_at"] else "error" if alert["send_error"] else "pending"
+            values = (str(alert["created_at"]), alert["event_type"], f"{payload.get('artist', '-')} — {payload.get('title', '-')}", payload.get("store", "-"), payload.get("price", "-"), status)
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value)); item.setData(Qt.ItemDataRole.UserRole, alert); self.alert_table.setItem(row, column, item)
+        self._update_alert_actions()
+
+    def _last_alert_text(self, release_id: int) -> str:
+        rows = [row for row in self.repository.alerts() if row["release_id"] == release_id]
+        return str(rows[-1]["event_type"]) if rows else "—"
+
+    def _selected_watch_id(self) -> int | None:
+        items = self.watch_table.selectedItems(); return int(items[0].data(Qt.ItemDataRole.UserRole)) if items else None
+
+    def add_selected_watch(self) -> None:
+        if not self.selected_result:
+            self.status_label.setText("Сначала выберите Release в поиске."); return
+        self.repository.add_watchlist(self.selected_result.release_id); self.refresh_tracking()
+
+    def remove_selected_watch(self) -> None:
+        if (release_id := self._selected_watch_id()) is not None: self.repository.remove_watchlist(release_id); self.refresh_tracking()
+
+    def toggle_selected_watch(self) -> None:
+        if (release_id := self._selected_watch_id()) is None: return
+        entry = next(row for row in self.repository.watchlist_entries() if row["release_id"] == release_id)
+        self.repository.set_watchlist_enabled(release_id, not bool(entry["enabled"])); self.refresh_tracking()
+
+    def edit_selected_watch(self) -> None:
+        if (release_id := self._selected_watch_id()) is None: return
+        entry = next(row for row in self.repository.watchlist_entries() if row["release_id"] == release_id)
+        dialog = QDialog(self); dialog.setWindowTitle("Параметры отслеживания"); form = QFormLayout(dialog)
+        maximum = QLineEdit(str(entry["max_price"] or "")); minimum = QComboBox(); minimum.addItems(["", "NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); minimum.setCurrentText(str(entry["min_deal_class"] or ""))
+        local = QCheckBox(); local.setChecked(bool(entry["local_only"])); city = QLineEdit(str(entry["city"] or "")); pickup = QCheckBox(); pickup.setChecked(bool(entry["pickup_only"]))
+        for label, widget in (("Макс. цена", maximum), ("Min deal class", minimum), ("Только local", local), ("Город", city), ("Только самовывоз", pickup)): form.addRow(label, widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject); form.addRow(buttons)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            try:
+                value = Decimal(maximum.text()) if maximum.text().strip() else None
+            except Exception:
+                self.status_label.setText("Макс. цена должна быть числом.")
+                return
+            self.update_watch_parameters(release_id, max_price=value, min_deal_class=minimum.currentText() or None, local_only=local.isChecked(), city=city.text().strip() or None, pickup_only=pickup.isChecked())
+
+    def update_watch_parameters(self, release_id: int, *, max_price: Decimal | None, min_deal_class: str | None, local_only: bool, city: str | None, pickup_only: bool) -> None:
+        """Persist GUI editing through the existing watchlist repository API."""
+        entry = next(row for row in self.repository.watchlist_entries() if row["release_id"] == release_id)
+        self.repository.add_watchlist(release_id, max_price=max_price, min_deal_class=min_deal_class, local_only=local_only, city=city, pickup_only=pickup_only)
+        if not entry["enabled"]:
+            self.repository.set_watchlist_enabled(release_id, False)
+        self.refresh_tracking()
+
+    def open_watch_offers(self) -> None:
+        if (release_id := self._selected_watch_id()) is None: return
+        self.results = [result for result in self.search_service(self.repository) if result.release_id == release_id]
+        self.release_table.setRowCount(0)
+        if self.results:
+            result = self.results[0]; self.release_table.insertRow(0)
+            for column, value in enumerate((result.artist, result.title, result.label or "", result.catalog_number or "", str(result.release_year or ""), result.format or "", result.barcode or "")):
+                item = QTableWidgetItem(value); item.setData(Qt.ItemDataRole.UserRole, result.release_id if column == 0 else None); self.release_table.setItem(0, column, item)
+            self.tabs.setCurrentWidget(self.search_page); self.release_table.selectRow(0)
+
+    def _update_alert_actions(self) -> None:
+        items = self.alert_table.selectedItems() if hasattr(self, "alert_table") else []
+        payload = items[0].data(Qt.ItemDataRole.UserRole)["payload"] if items else {}
+        if hasattr(self, "alert_open_store_button"):
+            self.alert_open_store_button.setEnabled(bool(payload.get("url"))); self.alert_open_discogs_button.setEnabled(bool(payload.get("discogs_url")))
+
+    def _selected_alert_payload(self) -> dict[str, object] | None:
+        items = self.alert_table.selectedItems(); return items[0].data(Qt.ItemDataRole.UserRole)["payload"] if items else None
+
+    def open_alert_store(self) -> None:
+        if (payload := self._selected_alert_payload()) and payload.get("url"): self.url_opener(QUrl(str(payload["url"])))
+
+    def open_alert_discogs(self) -> None:
+        if (payload := self._selected_alert_payload()) and payload.get("discogs_url"): self.url_opener(QUrl(str(payload["discogs_url"])))
+
+    def _restore_scheduler(self) -> None:
+        settings = QSettings("VinylDeals", "Desktop"); enabled = settings.value("scheduler/enabled", False, type=bool); interval = settings.value("scheduler/interval", 60, type=int); interval = interval if interval in ALLOWED_INTERVALS else 60
+        self.scheduler_enabled.setChecked(enabled); self.scheduler_interval.setCurrentText(str(interval)); self.scheduler_auto_send.setChecked(settings.value("scheduler/auto_send", False, type=bool)); self.scheduler.configure(enabled=enabled, interval_minutes=interval, auto_send=self.scheduler_auto_send.isChecked())
+        self.scheduler.status.connect(self.status_label.setText); self.scheduler.cycle_completed.connect(self._scheduler_completed); self.scheduler.cycle_failed.connect(lambda message: self.status_label.setText(f"Ошибка проверки: {message}")); self.scheduler.running_changed.connect(self._set_updating)
+
+    def save_scheduler_settings(self) -> None:
+        if not hasattr(self, "scheduler"): return
+        enabled, interval, auto_send = self.scheduler_enabled.isChecked(), int(self.scheduler_interval.currentText()), self.scheduler_auto_send.isChecked()
+        settings = QSettings("VinylDeals", "Desktop"); settings.setValue("scheduler/enabled", enabled); settings.setValue("scheduler/interval", interval); settings.setValue("scheduler/auto_send", auto_send); self.scheduler.configure(enabled=enabled, interval_minutes=interval, auto_send=auto_send)
+        if enabled and not self._updating:
+            self.status_label.setText(f"Следующая проверка: через {interval} мин.")
+
+    def run_scheduler_cycle(self) -> None:
+        if not self._updating and self.scheduler.trigger(): self.status_label.setText("Обновление...")
+
+    def _scheduler_completed(self, result: object) -> None:
+        count = result.get("alerts", 0) if isinstance(result, dict) else 0; self.status_label.setText(f"Новых alerts: {count}"); self.refresh_tracking()
+        if self._search_performed:
+            self.perform_search()
+
+    def send_pending_alerts(self) -> None:
+        from vinyl_deals.notifications import TelegramNotifier, format_alert
+        if hasattr(self, "_alert_worker") and self._alert_worker and self._alert_worker.isRunning(): return
+        def send() -> int:
+            notifier = TelegramNotifier()
+            if not notifier.configured: raise RuntimeError("Telegram не настроен")
+            sent = 0
+            for row in self.repository.alerts(unsent_only=True):
+                try: notifier.send(format_alert(row["payload"])); self.repository.mark_alert_sent(int(row["id"])); sent += 1
+                except Exception as error: self.repository.mark_alert_error(int(row["id"]), f"delivery failed: {type(error).__name__}")
+            return sent
+        self._alert_worker = TaskWorker(send); self._alert_worker.completed.connect(lambda count: (self.status_label.setText(f"Telegram sent: {count}"), self.refresh_tracking())); self._alert_worker.failed.connect(lambda message: self.status_label.setText(f"Ошибка Telegram: {message}")); self._alert_worker.finished.connect(lambda: self._alert_worker.deleteLater()); self._alert_worker.start()
+
     def _restore_window_state(self) -> None:
         geometry = QSettings("VinylDeals", "Desktop").value("window/geometry")
         if geometry:
@@ -118,6 +289,12 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         QSettings("VinylDeals", "Desktop").setValue("window/geometry", self.saveGeometry())
+        self.scheduler.shutdown()
+        if self._worker and self._worker.isRunning():
+            self._worker.wait(3000)
+        worker = getattr(self, "_alert_worker", None)
+        if worker and worker.isRunning():
+            worker.wait(3000)
         super().closeEvent(event)
 
     def _criteria(self) -> dict[str, object] | None:
@@ -215,9 +392,17 @@ class MainWindow(QMainWindow):
 
     def _set_updating(self, updating: bool) -> None:
         self._updating = updating
+        if updating and self.scheduler.timer.isActive():
+            self.scheduler.timer.stop()
+            self._resume_scheduler_timer = True
+        elif not updating and getattr(self, "_resume_scheduler_timer", False):
+            self.scheduler.timer.start(self.scheduler.interval_minutes * 60_000)
+            self._resume_scheduler_timer = False
         for field in self.fields.values():
             field.setEnabled(not updating)
         for control in (self.search_button, self.clear_button, self.refresh_button, self.release_table, self.offer_table):
+            control.setEnabled(not updating)
+        for control in (self.watch_add_button, self.watch_remove_button, self.watch_enable_button, self.watch_edit_button, self.watch_open_button, self.watch_table, self.scheduler_enabled, self.scheduler_interval, self.scheduler_auto_send, self.scheduler_run_button, self.alert_table, self.alert_open_store_button, self.alert_open_discogs_button, self.alert_send_button):
             control.setEnabled(not updating)
         self._update_open_actions()
 
@@ -231,7 +416,7 @@ class MainWindow(QMainWindow):
             self.url_opener(QUrl(self.selected_result.discogs_url))
 
     def start_refresh(self) -> None:
-        if self._worker and self._worker.isRunning():
+        if (self._worker and self._worker.isRunning()) or self.scheduler.running:
             return
         self._set_updating(True)
         self.status_label.setText("Обновление данных...")

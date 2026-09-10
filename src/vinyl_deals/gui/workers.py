@@ -23,3 +23,15 @@ class UpdateWorker(QThread):
             self.completed.emit(self.update_service(self.repository, progress=self.progress.emit))
         except Exception as error:
             self.failed.emit(str(error))
+
+
+class TaskWorker(QThread):
+    completed = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, task: Callable[[], object]) -> None:
+        super().__init__(); self.task = task
+
+    def run(self) -> None:
+        try: self.completed.emit(self.task())
+        except Exception as error: self.failed.emit(str(error))
