@@ -6,11 +6,15 @@ from pathlib import Path
 from vinyl_deals.adapters import AudiomaniaAdapter, CollectomaniaAdapter, DrHeadAdapter, DroogRostovAdapter, ImagineClubAdapter, RespublicaAdapter, RioRostovAdapter, VinylRuAdapter
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.database.repository import ManualDecisionConflict, ReleaseMergeConflict
-from vinyl_deals.runtime import application_database_path
+from vinyl_deals.runtime import bootstrap_application_data
 
 def main() -> int:
+    try:
+        default_database = bootstrap_application_data()
+    except Exception as error:
+        print("Cannot prepare VinylDeals application data. Check access to LOCALAPPDATA.")
+        return 2
     parser = argparse.ArgumentParser(prog="vinyl-deals"); commands = parser.add_subparsers(dest="command", required=True)
-    default_database = application_database_path()
     scrape = commands.add_parser("scrape", help="Fetch a public store catalogue"); scrape.add_argument("source", choices=["vinyl_ru", "imagine_club", "collectomania", "rio_rostov", "audiomania", "respublica", "drhead", "droog_rostov"]); scrape.add_argument("--database", type=Path, default=default_database); scrape.add_argument("--page-limit", type=int, help="Temporary safe bound for a paginated source"); scrape.add_argument("--enrich", action="store_true", help="Fetch public product details for listed offers")
     match = commands.add_parser("match", help="Show pending possible release matches"); match.add_argument("--database", type=Path, default=default_database); match.add_argument("--build", action="store_true", help="Build candidate pairs from persisted offers")
     decide = commands.add_parser("decide-match", help="Save a manual release-match decision"); decide.add_argument("offer_id", type=int); decide.add_argument("candidate_offer_id", type=int); decide.add_argument("decision", choices=["same_release", "different_release", "ignore"]); decide.add_argument("--note"); decide.add_argument("--database", type=Path, default=default_database)

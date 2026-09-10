@@ -21,7 +21,7 @@ def main() -> None:
     metadata = BUILD / "build_meta.json"
     metadata.write_text(json.dumps({"version": __version__, "commit": commit[:12], "build_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")}), encoding="utf-8")
     data = f"{metadata}{os.pathsep}vinyl_deals"
-    common = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--collect-all", "PySide6", "--add-data", data]
+    common = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--specpath", str(BUILD), "--collect-all", "PySide6", "--add-data", data]
     subprocess.check_call([*common, "--windowed", "--name", "vinyl-deals-gui", str(ROOT / "tools" / "gui_entry.py")], cwd=ROOT)
     subprocess.check_call([*common, "--name", "vinyl-deals", str(ROOT / "tools" / "cli_entry.py")], cwd=ROOT)
 

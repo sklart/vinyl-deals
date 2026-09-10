@@ -61,8 +61,7 @@ class Scheduler(QObject):
 
     @property
     def running(self) -> bool:
-        # Keep the maintenance guard held until the GUI thread has processed
-        # ``finished`` and restored the timer/UI state.
+        self._reap_finished_worker()
         return self.worker is not None
 
     def configure(self, *, enabled: bool, interval_minutes: int, auto_send: bool) -> None:
@@ -74,15 +73,25 @@ class Scheduler(QObject):
     def trigger(self) -> bool:
         if self.shutting_down or self.running or not self.start_guard(): return False
         worker = CycleWorker(self.repository, refresh_service=self.refresh_service, auto_send=self.auto_send)
-        self.worker = worker; worker.progress.connect(self.status); worker.completed.connect(self._completed); worker.failed.connect(self.cycle_failed); worker.finished.connect(self._finished); self.running_changed.emit(True); worker.start(); return True
+        self.worker = worker; worker.progress.connect(self.status); worker.completed.connect(self._completed); worker.failed.connect(self.cycle_failed); worker.finished.connect(lambda: self._finished(worker)); self.running_changed.emit(True); worker.start(); return True
 
     def _completed(self, result: object) -> None: self.cycle_completed.emit(result)
-    def _finished(self) -> None:
-        if self.worker: self.worker.deleteLater()
-        self.worker = None; self.running_changed.emit(False)
+    def _reap_finished_worker(self) -> None:
+        worker = self.worker
+        if worker is not None and not worker.isRunning():
+            self._finished(worker)
+
+    def _finished(self, worker: CycleWorker) -> None:
+        # An old queued ``finished`` signal must never clean up a new cycle.
+        if worker is not self.worker:
+            return
+        worker.deleteLater()
+        self.worker = None
+        self.running_changed.emit(False)
 
     def shutdown(self) -> None:
         self.timer.stop()
         self.shutting_down = True
         if self.worker and self.worker.isRunning():
             self.worker.wait()
+        self._reap_finished_worker()

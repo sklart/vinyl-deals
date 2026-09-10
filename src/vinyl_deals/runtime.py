@@ -5,10 +5,13 @@ import logging
 import os
 import shutil
 import sys
+import hashlib
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import TracebackType
 from typing import Callable
+
+from PySide6.QtCore import QLockFile
 
 from vinyl_deals.database.repository import SQLiteRepository
 
@@ -59,6 +62,11 @@ def prepare_application_data(*, legacy_candidates: tuple[Path, ...] = (), enviro
     return database
 
 
+def bootstrap_application_data() -> Path:
+    """Shared GUI/CLI bootstrap for app-data, legacy copy and migrations."""
+    return prepare_application_data(legacy_candidates=(Path.cwd() / DATABASE_NAME, Path(sys.executable).resolve().parent / DATABASE_NAME))
+
+
 class _SecretFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
@@ -92,41 +100,48 @@ def configure_logging(directory: Path | None = None, *, max_bytes: int = 1_000_0
 
 
 class SingleInstanceLock:
-    """Atomic per-user lock; a second GUI process exits cleanly."""
+    """Per-user single instance: named mutex on Windows, QLockFile elsewhere."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self._owned = False
+        self._handle: int | None = None
+        self._file_lock = QLockFile(str(path))
+        self._file_lock.setStaleLockTime(30_000)
 
     def acquire(self) -> bool:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        for _ in range(2):
-            try:
-                descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                if self._is_stale():
-                    self.path.unlink(missing_ok=True)
-                    continue
+        if os.name == "nt":
+            import ctypes
+            name = "Local\\VinylDeals-" + hashlib.sha256(str(self.path.resolve()).encode("utf-8")).hexdigest()[:24]
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p)
+            kernel32.CreateMutexW.restype = ctypes.c_void_p
+            kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+            kernel32.CloseHandle.restype = ctypes.c_bool
+            handle = kernel32.CreateMutexW(None, False, name)
+            if not handle:
+                raise OSError("Cannot create Windows single-instance mutex")
+            if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+                kernel32.CloseHandle(handle)
                 return False
-            with os.fdopen(descriptor, "w", encoding="ascii") as stream:
-                stream.write(str(os.getpid()))
+            self._handle = int(handle)
             self._owned = True
             return True
-        return False
-
-    def _is_stale(self) -> bool:
-        try:
-            pid = int(self.path.read_text(encoding="ascii").strip())
-            os.kill(pid, 0)
-        except (FileNotFoundError, ValueError, ProcessLookupError):
-            return True
-        except PermissionError:
-            return False
-        return False
+        self._owned = self._file_lock.tryLock(0)
+        return self._owned
 
     def release(self) -> None:
         if self._owned:
-            self.path.unlink(missing_ok=True)
+            if self._handle is not None:
+                import ctypes
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+                kernel32.CloseHandle.restype = ctypes.c_bool
+                kernel32.CloseHandle(self._handle)
+                self._handle = None
+            else:
+                self._file_lock.unlock()
             self._owned = False
 
 

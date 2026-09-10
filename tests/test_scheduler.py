@@ -53,6 +53,8 @@ def test_scheduler_does_not_run_two_cycles_at_once(qapp, tmp_path):
     assert scheduler.trigger() is False
     unblock.set()
     assert wait_until(qapp, lambda: not scheduler.running)
+    assert scheduler.trigger() is True
+    assert wait_until(qapp, lambda: not scheduler.running)
     scheduler.shutdown()
 
 

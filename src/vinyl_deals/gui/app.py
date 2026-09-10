@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QMessageBox
 
-from vinyl_deals.runtime import SingleInstanceLock, configure_logging, install_exception_hook, prepare_application_data
+from vinyl_deals.runtime import SingleInstanceLock, bootstrap_application_data, configure_logging, install_exception_hook
 from .main_window import MainWindow
 
 
@@ -14,7 +13,7 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     arguments = argv if argv is not None else sys.argv
     try:
-        database = prepare_application_data(legacy_candidates=(Path.cwd() / "vinyl_deals.sqlite3", Path(sys.executable).resolve().parent / "vinyl_deals.sqlite3"))
+        database = bootstrap_application_data()
     except Exception as error:
         QMessageBox.critical(None, "Vinyl Deals", "Не удалось подготовить пользовательские данные. Проверьте доступ к LocalAppData.")
         return 2
