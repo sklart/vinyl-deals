@@ -61,7 +61,10 @@ class Scheduler(QObject):
 
     @property
     def running(self) -> bool:
-        self._reap_finished_worker()
+        # ``QThread.isRunning()`` can still be false in the brief interval
+        # immediately after ``start()``. Reaping from this polling property
+        # then deletes a worker before its ``run`` method gets CPU time (seen
+        # on Python 3.13). ``finished`` is the authoritative lifecycle event.
         return self.worker is not None
 
     def configure(self, *, enabled: bool, interval_minutes: int, auto_send: bool) -> None:
@@ -76,11 +79,6 @@ class Scheduler(QObject):
         self.worker = worker; worker.progress.connect(self.status); worker.completed.connect(self._completed); worker.failed.connect(self.cycle_failed); worker.finished.connect(lambda: self._finished(worker)); self.running_changed.emit(True); worker.start(); return True
 
     def _completed(self, result: object) -> None: self.cycle_completed.emit(result)
-    def _reap_finished_worker(self) -> None:
-        worker = self.worker
-        if worker is not None and not worker.isRunning():
-            self._finished(worker)
-
     def _finished(self, worker: CycleWorker) -> None:
         # An old queued ``finished`` signal must never clean up a new cycle.
         if worker is not self.worker:
@@ -92,6 +90,9 @@ class Scheduler(QObject):
     def shutdown(self) -> None:
         self.timer.stop()
         self.shutting_down = True
-        if self.worker and self.worker.isRunning():
-            self.worker.wait()
-        self._reap_finished_worker()
+        worker = self.worker
+        if worker is not None:
+            # The worker remains owned until this point. No termination is
+            # used: a refresh/Telegram operation finishes cooperatively.
+            worker.wait()
+            self._finished(worker)

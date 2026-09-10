@@ -70,6 +70,9 @@ def test_scheduler_shutdown_waits_for_active_worker(qapp, tmp_path):
 
     scheduler = Scheduler(SQLiteRepository(tmp_path / "shutdown.sqlite3"), refresh_service=refresh)
     assert scheduler.trigger()
+    # A just-started QThread may not report isRunning() yet, but Scheduler
+    # must keep ownership until its authoritative finished signal arrives.
+    assert scheduler.running
     assert wait_until(qapp, started.is_set)
     worker = scheduler.worker
     Timer(0.05, unblock.set).start()
