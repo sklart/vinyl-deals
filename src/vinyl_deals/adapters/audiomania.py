@@ -37,23 +37,29 @@ class AudiomaniaAdapter(BaseStoreAdapter):
             return ScrapeResult((), StoreState.DEGRADED, ("Audiomania returned a CAPTCHA or access-check page; source paused.",))
         product_urls = self._product_urls(root)
         listing_pages = 1
-        if not product_urls:
-            collection_urls = self._collection_urls(root)
-            if self.page_limit is not None:
-                collection_urls = collection_urls[:self.page_limit]
-            try:
-                for collection_url in collection_urls:
-                    collection = self._fetch(collection_url)
-                    if self._is_blocked(collection):
-                        return ScrapeResult((), StoreState.DEGRADED, ("Audiomania returned a CAPTCHA or access-check page; source paused.",), pages_processed=listing_pages)
-                    product_urls.extend(self._product_urls(collection))
-                    listing_pages += 1
-                    if self.delay_seconds:
-                        sleep(self.delay_seconds)
-            except (HTTPError, URLError, OSError) as error:
-                status = getattr(error, "code", None)
-                detail = f"HTTP {status}" if status in {403, 429} else type(error).__name__
-                return ScrapeResult((), StoreState.DEGRADED, (f"Audiomania public catalogue unavailable ({detail}); source paused.",), pages_processed=listing_pages)
+        visited_collection_urls = {self._collection_key(self.catalog_url)}
+        pending_collection_urls = self._collection_urls(root)
+        try:
+            while pending_collection_urls:
+                if self.page_limit is not None and listing_pages - 1 >= self.page_limit:
+                    break
+                collection_url = pending_collection_urls.pop(0)
+                collection_key = self._collection_key(collection_url)
+                if collection_key in visited_collection_urls:
+                    continue
+                visited_collection_urls.add(collection_key)
+                collection = self._fetch(collection_url)
+                if self._is_blocked(collection):
+                    return ScrapeResult((), StoreState.DEGRADED, ("Audiomania returned a CAPTCHA or access-check page; source paused.",), pages_processed=listing_pages)
+                product_urls.extend(self._product_urls(collection))
+                pending_collection_urls.extend(self._collection_urls(collection))
+                listing_pages += 1
+                if self.delay_seconds:
+                    sleep(self.delay_seconds)
+        except (HTTPError, URLError, OSError) as error:
+            status = getattr(error, "code", None)
+            detail = f"HTTP {status}" if status in {403, 429} else type(error).__name__
+            return ScrapeResult((), StoreState.DEGRADED, (f"Audiomania public catalogue unavailable ({detail}); source paused.",), pages_processed=listing_pages)
         product_urls = list(dict.fromkeys(product_urls))
         if self.page_limit is not None:
             product_urls = product_urls[:self.page_limit]
@@ -74,10 +80,12 @@ class AudiomaniaAdapter(BaseStoreAdapter):
             return ScrapeResult((), StoreState.DEGRADED, (f"Audiomania public catalogue unavailable ({detail}); source paused.",))
         if not offers:
             return ScrapeResult((), StoreState.DEGRADED, ("Audiomania catalogue parsed zero vinyl offers; parser may be stale."), pages_processed=listing_pages + len(product_urls))
-        warning = (f"Catalogue intentionally limited to {self.page_limit} product pages.",) if self.page_limit is not None else ()
+        warning = (f"Catalogue intentionally limited to {self.page_limit} collection pages and product pages.",) if self.page_limit is not None else ()
         return ScrapeResult(tuple({offer.source_product_id: offer for offer in offers}.values()), warnings=warning, pages_processed=listing_pages + len(product_urls))
 
     def enrich_offer(self, offer: RawOffer) -> RawOffer:
+        if offer.raw_data.get("fully_enriched"):
+            return offer
         detailed = self.parse_public_product_page(self._fetch(offer.url), offer.url)
         if detailed is None:
             return offer
@@ -113,7 +121,8 @@ class AudiomaniaAdapter(BaseStoreAdapter):
             release_year=self._year(self._first(r"\u0413\u043e\u0434\s+\u0438\u0437\u0434\u0430\u043d\u0438\u044f\s*:\s*((?:19|20)\d{2})", content, re.I)),
             format=self._format(content), disc_count=self._integer(self._first(r"\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e\s+\u043f\u043b\u0430\u0441\u0442\u0438\u043d\u043e\u043a\s*:\s*(\d+)", content, re.I)),
             country=self._first(r"\u0421\u0442\u0440\u0430\u043d\u0430\s*:\s*([^\.]+)", content, re.I) or None,
-            condition_media=condition, condition_sleeve=condition, raw_data={"public_card": True, "audiomania_article": product_id},
+            condition_media=condition, condition_sleeve=condition,
+            raw_data={"public_card": True, "fully_enriched": True, "audiomania_article": product_id},
         )
 
     def parse_listing(self, html: str, *, fetched_at: datetime | None = None) -> list[RawOffer]:
@@ -210,6 +219,10 @@ class AudiomaniaAdapter(BaseStoreAdapter):
             if self._is_vinyl_url(url) and not no_query.endswith(".html") and no_query != self.catalog_url.rstrip("/"):
                 urls.append(url)
         return list(dict.fromkeys(urls))
+
+    @staticmethod
+    def _collection_key(url: str) -> str:
+        return url.split("#", 1)[0].split("?", 1)[0].rstrip("/").casefold()
 
     def _is_vinyl_url(self, url: str) -> bool:
         return url.casefold().startswith(f"{self.base_url}/vinilovye_plastinki/")
