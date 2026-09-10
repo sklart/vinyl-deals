@@ -90,7 +90,7 @@ class RioRostovAdapter(BaseStoreAdapter):
     def parse_product_page(self, html: str, listing_offer: RawOffer) -> RawOffer:
         content = self._text(html)
         barcode = next(iter(re.findall(r"(?<!\d)(\d{12,14})(?!\d)", content)), "") or None
-        condition = self._condition(content)
+        media_condition, sleeve_condition = self._conditions(content)
         metadata = self._metadata(content, barcode)
         return RawOffer(**{**{name: getattr(listing_offer, name) for name in listing_offer.__dataclass_fields__},
             "barcode": barcode or listing_offer.barcode,
@@ -98,8 +98,8 @@ class RioRostovAdapter(BaseStoreAdapter):
             "release_year": metadata[1] or listing_offer.release_year,
             "country": metadata[2] or listing_offer.country,
             "format": self._format(content) or listing_offer.format,
-            "condition_media": condition or listing_offer.condition_media,
-            "condition_sleeve": condition or listing_offer.condition_sleeve,
+            "condition_media": media_condition or listing_offer.condition_media,
+            "condition_sleeve": sleeve_condition or listing_offer.condition_sleeve,
             "raw_data": {**listing_offer.raw_data, "public_card": True},
         })
 
@@ -126,16 +126,20 @@ class RioRostovAdapter(BaseStoreAdapter):
         return None, value or None
 
     @staticmethod
-    def _condition(content: str) -> str | None:
+    def _conditions(content: str) -> tuple[str | None, str | None]:
         match = re.search(r"(?<!\w)(S|M|NM|EX|VG\+|VG|G)\s*/\s*(S|M|NM|EX|VG\+|VG|G)(?!\w)", content, re.I)
         if not match:
-            return None
-        value = match.group(1).casefold()
-        return "SEALED" if value == "s" else value.upper()
+            return None, None
+        def normalize(value: str) -> str:
+            return "SEALED" if value.casefold() == "s" else value.upper()
+        return normalize(match.group(1)), normalize(match.group(2))
 
     @staticmethod
     def _format(content: str) -> str | None:
-        match = re.search(r"\b(?:\dLP|LP|EP|12['\"]|10['\"]|7['\"])\b", content, re.I)
+        # A closing quote is not a word character, so a trailing ``\b`` would
+        # miss sizes such as 7\".  Explicit lookarounds keep this from matching
+        # arbitrary numbers in product descriptions.
+        match = re.search(r"(?<![\w\d])(?:[7]|10|12)['\"](?!\w)|(?<!\w)(?:\d+LP|LP|EP)(?!\w)", content, re.I)
         return match.group().upper() if match else None
 
     @staticmethod

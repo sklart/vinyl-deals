@@ -39,10 +39,27 @@ def test_parses_rio_embedded_public_catalogue_payload() -> None:
 
 def test_rio_condition_parser_handles_discogs_style_pairs() -> None:
     adapter = RioRostovAdapter()
-    assert adapter._condition("NM/NM") == "NM"
-    assert adapter._condition("VG+/VG+") == "VG+"
-    assert adapter._condition("S/S") == "SEALED"
+    assert adapter._conditions("NM/NM") == ("NM", "NM")
+    assert adapter._conditions("VG+/VG+") == ("VG+", "VG+")
+    assert adapter._conditions("S/S") == ("SEALED", "SEALED")
     listing = adapter.parse_listing(Path("tests/fixtures/rio_rostov/listing.html").read_text(encoding="utf-8"))[0]
     for raw, bucket in (("NM/NM", "nm"), ("VG+/VG+", "vg+"), ("S/S", "new")):
         parsed = adapter.parse_product_page(f"<p>{raw}</p>", listing)
         assert condition_bucket(parsed) == bucket
+
+
+def test_rio_preserves_distinct_media_and_sleeve_conditions() -> None:
+    adapter = RioRostovAdapter()
+    listing = adapter.parse_listing(Path("tests/fixtures/rio_rostov/listing.html").read_text(encoding="utf-8"))[0]
+    for raw, expected in (("NM/VG+", ("NM", "VG+")), ("VG+/VG", ("VG+", "VG")), ("S/S", ("SEALED", "SEALED")), ("M/NM", ("M", "NM"))):
+        parsed = adapter.parse_product_page(f"<p>{raw}</p>", listing)
+        assert (parsed.condition_media, parsed.condition_sleeve) == expected
+    # The pricing bucket is deliberately based on media, not sleeve state.
+    assert condition_bucket(adapter.parse_product_page("<p>NM/VG+</p>", listing)) == "nm"
+
+
+def test_rio_format_parser_handles_sizes_and_record_types() -> None:
+    adapter = RioRostovAdapter()
+    for value in ('7"', '10"', '12"', "7'", "10'", "12'", "LP", "2LP", "3LP", "EP"):
+        assert adapter._format(value) == value.upper()
+    assert adapter._format("edition 2024") is None
