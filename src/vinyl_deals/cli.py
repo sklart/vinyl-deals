@@ -3,7 +3,7 @@ import argparse
 from decimal import Decimal
 from time import sleep
 from pathlib import Path
-from vinyl_deals.adapters import AVSoundAdapter, AudiomaniaAdapter, CollectomaniaAdapter, DrHeadAdapter, DroogRostovAdapter, ImagineClubAdapter, MaximumVinylAdapter, PultAdapter, RespublicaAdapter, RioRostovAdapter, TishinaAdapter, VernoshopAdapter, VidikaAdapter, VinylmarktAdapter, VinylRuAdapter
+from vinyl_deals.adapters import AVSoundAdapter, AudiomaniaAdapter, CollectomaniaAdapter, DrHeadAdapter, DroogRostovAdapter, ImagineClubAdapter, MaximumVinylAdapter, OnlineTradeAdapter, PultAdapter, RespublicaAdapter, RioRostovAdapter, TishinaAdapter, VernoshopAdapter, VidikaAdapter, VinylmarktAdapter, VinylRuAdapter
 from vinyl_deals.database import SQLiteRepository
 from vinyl_deals.database.repository import ManualDecisionConflict, ReleaseMergeConflict
 from vinyl_deals.runtime import bootstrap_application_data
@@ -15,7 +15,7 @@ def main() -> int:
         print("Cannot prepare portable VinylDeals data folder. Check access to the program folder.")
         return 2
     parser = argparse.ArgumentParser(prog="vinyl-deals"); commands = parser.add_subparsers(dest="command", required=True)
-    scrape = commands.add_parser("scrape", help="Fetch a public store catalogue"); scrape.add_argument("source", choices=["vinyl_ru", "imagine_club", "collectomania", "rio_rostov", "audiomania", "respublica", "drhead", "droog_rostov", "vidika", "maximum_vinyl", "vinylmarkt", "vernoshop", "tishina", "avsound", "pult"]); scrape.add_argument("--database", type=Path, default=default_database); scrape.add_argument("--page-limit", type=int, help="Temporary safe bound for a paginated source"); scrape.add_argument("--enrich", action="store_true", help="Fetch public product details for listed offers")
+    scrape = commands.add_parser("scrape", help="Fetch a public store catalogue"); scrape.add_argument("source", choices=["vinyl_ru", "imagine_club", "collectomania", "rio_rostov", "audiomania", "respublica", "drhead", "droog_rostov", "vidika", "maximum_vinyl", "vinylmarkt", "vernoshop", "tishina", "avsound", "pult", "onlinetrade"]); scrape.add_argument("--database", type=Path, default=default_database); scrape.add_argument("--page-limit", type=int, help="Temporary safe bound for a paginated source"); scrape.add_argument("--enrich", action="store_true", help="Fetch public product details for listed offers")
     match = commands.add_parser("match", help="Show pending possible release matches"); match.add_argument("--database", type=Path, default=default_database); match.add_argument("--build", action="store_true", help="Build candidate pairs from persisted offers")
     decide = commands.add_parser("decide-match", help="Save a manual release-match decision"); decide.add_argument("offer_id", type=int); decide.add_argument("candidate_offer_id", type=int); decide.add_argument("decision", choices=["same_release", "different_release", "ignore"]); decide.add_argument("--note"); decide.add_argument("--database", type=Path, default=default_database)
     deals = commands.add_parser("deals", help="Evaluate matched release offers"); deals.add_argument("--database", type=Path, default=default_database); deals.add_argument("--min-class", default="NORMAL", choices=["NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); deals.add_argument("--include-insufficient", action="store_true", help="Include historical-only signals with insufficient market data"); deals.add_argument("--limit", type=int, default=50); deals.add_argument("--release-id", type=int); deals.add_argument("--local", action="store_true", help="Show only local-store offers"); deals.add_argument("--city"); deals.add_argument("--pickup", action="store_true", help="Show only offers with confirmed pickup")
@@ -164,7 +164,7 @@ def main() -> int:
             print()
         return 0
     factories = {"vinyl_ru": VinylRuAdapter, "rio_rostov": RioRostovAdapter, "droog_rostov": DroogRostovAdapter}
-    paged_factories = {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter, "audiomania": AudiomaniaAdapter, "respublica": RespublicaAdapter, "drhead": DrHeadAdapter, "vidika": VidikaAdapter, "maximum_vinyl": MaximumVinylAdapter, "vinylmarkt": VinylmarktAdapter, "vernoshop": VernoshopAdapter, "tishina": TishinaAdapter, "avsound": AVSoundAdapter, "pult": PultAdapter}
+    paged_factories = {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter, "audiomania": AudiomaniaAdapter, "respublica": RespublicaAdapter, "drhead": DrHeadAdapter, "vidika": VidikaAdapter, "maximum_vinyl": MaximumVinylAdapter, "vinylmarkt": VinylmarktAdapter, "vernoshop": VernoshopAdapter, "tishina": TishinaAdapter, "avsound": AVSoundAdapter, "pult": PultAdapter, "onlinetrade": OnlineTradeAdapter}
     adapter = factories[args.source]() if args.source in factories else paged_factories[args.source](page_limit=args.page_limit)
     repository = SQLiteRepository(args.database)
     run_id = repository.start_scrape_run(args.source)

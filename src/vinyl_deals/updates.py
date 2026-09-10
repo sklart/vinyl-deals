@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from time import sleep
 from typing import Callable
 
-from vinyl_deals.adapters import AVSoundAdapter, AudiomaniaAdapter, CollectomaniaAdapter, DrHeadAdapter, ImagineClubAdapter, MaximumVinylAdapter, PultAdapter, RespublicaAdapter, RioRostovAdapter, TishinaAdapter, VernoshopAdapter, VidikaAdapter, VinylmarktAdapter, VinylRuAdapter
+from vinyl_deals.adapters import AVSoundAdapter, AudiomaniaAdapter, CollectomaniaAdapter, DrHeadAdapter, ImagineClubAdapter, MaximumVinylAdapter, OnlineTradeAdapter, PultAdapter, RespublicaAdapter, RioRostovAdapter, TishinaAdapter, VernoshopAdapter, VidikaAdapter, VinylmarktAdapter, VinylRuAdapter
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.matching.service import build_match_queue
 
@@ -35,6 +35,7 @@ DEFAULT_ADAPTER_FACTORIES = {
     "tishina": TishinaAdapter,
     "avsound": AVSoundAdapter,
     "pult": PultAdapter,
+    "onlinetrade": OnlineTradeAdapter,
 }
 STORE_LABELS = {
     "imagine_club": "Imagine Club",
@@ -51,6 +52,7 @@ STORE_LABELS = {
     "tishina": "Тишина",
     "avsound": "AVSound",
     "pult": "Pult.ru (публичный каталог ограничен)",
+    "onlinetrade": "OnlineTrade",
 }
 logger = logging.getLogger("vinyl_deals.scraping")
 

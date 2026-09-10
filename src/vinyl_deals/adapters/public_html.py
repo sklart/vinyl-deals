@@ -137,12 +137,14 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
         stable_id = product_id or sha256(absolute_url.encode("utf-8")).hexdigest()[:20]
         artist, title = self._split_artist_title(name)
         unavailable = re.search(r"(?:нет\s+в\s+наличии|распродан|законч|out[- ]of[- ]stock)", availability_value, re.I)
+        available = re.search(r"(?:в\s+наличии|достаточно|instock|in[- ]stock)", availability_value, re.I)
         return RawOffer(source=self.source, source_product_id=stable_id, store_sku=product_id or None, url=absolute_url,
             fetched_at=timestamp, artist_raw=artist, title_raw=title, price=price,
-            availability=Availability.OUT_OF_STOCK if unavailable else Availability.IN_STOCK,
+            availability=Availability.OUT_OF_STOCK if unavailable else Availability.IN_STOCK if available else Availability.UNKNOWN,
             barcode=barcode, format=self._format(name), condition_media="NEW", condition_sleeve="NEW", raw_data=raw_data)
 
     def _page_url(self, page: int) -> str:
+        """Override per store when its public catalogue uses another query key."""
         separator = "&" if "?" in self.catalog_url else "?"
         return f"{self.catalog_url}{separator}PAGEN_1={page}"
 
@@ -207,6 +209,11 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
             if value:
                 return value.strip()
         return None
+
+    @classmethod
+    def _properties(cls, html: str) -> dict[str, str]:
+        pairs = re.findall(r'<(?:tr|dl|div)[^>]*>\s*<(?:th|dt|span)[^>]*>(.*?)</(?:th|dt|span)>\s*<(?:td|dd|span)[^>]*>(.*?)</(?:td|dd|span)>', html, re.I | re.S)
+        return {cls._text(key).casefold(): cls._text(value) for key, value in pairs}
 
     @staticmethod
     def _looks_like_vinyl(value: str) -> bool:
