@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 
 from vinyl_deals.adapters.public_html import PublicHtmlVinylAdapter
-from vinyl_deals.domain import Availability
+from vinyl_deals.domain import Availability, StoreSearchQuery
 
 
 class _Adapter(PublicHtmlVinylAdapter):
@@ -43,3 +43,13 @@ def test_jsonld_sku_becomes_source_id_only_without_product_id():
     html = _json_product('{"@type":"Product","name":"Vinyl Opeth - Blackwater Park LP","url":"/vinyl/opeth","sku":"SHOP-42","offers":{"price":"5000"}}')
     offer = adapter.parse_listing(html)[0]
     assert (offer.source_product_id, offer.store_sku, offer.barcode) == ("SHOP-42", "SHOP-42", None)
+
+
+def test_targeted_search_uses_public_search_page_not_catalogue(monkeypatch):
+    adapter = _Adapter()
+    requested = []
+    html = _json_product('{"@type":"Product","name":"Vinyl Opeth - Blackwater Park LP","url":"/vinyl/opeth","sku":"SHOP-42","offers":{"price":"5000","availability":"InStock"}}')
+    monkeypatch.setattr(adapter, "_fetch", lambda url: requested.append(url) or html)
+    result = adapter.search_offers(StoreSearchQuery(artist="Opeth", title="Blackwater Park"))
+    assert result.state.value == "active" and len(result.offers) == 1
+    assert requested == ["https://shop.example/search/?q=Opeth+Blackwater+Park"]

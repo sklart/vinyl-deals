@@ -21,6 +21,23 @@ class StoreState(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class StoreSearchQuery:
+    """A small, store-neutral query for a targeted public product search."""
+
+    artist: str | None = None
+    title: str | None = None
+    barcode: str | None = None
+    catalog_number: str | None = None
+
+    def text(self) -> str:
+        """Prefer identifiers; otherwise provide a compact human query."""
+        return self.barcode or self.catalog_number or " ".join(value for value in (self.artist, self.title) if value)
+
+    def is_empty(self) -> bool:
+        return not bool(self.text().strip())
+
+
+@dataclass(frozen=True, slots=True)
 class Release:
     """Canonical metadata aggregated from matched store offers."""
 
@@ -88,4 +105,15 @@ class ScrapeResult:
     state: StoreState = StoreState.ACTIVE
     warnings: tuple[str, ...] = ()
     pages_processed: int = 0
+    errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class StoreSearchResult:
+    """Isolated result of one store in a federated live search."""
+
+    source: str
+    offers: tuple[RawOffer, ...]
+    state: StoreState = StoreState.ACTIVE
+    warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()

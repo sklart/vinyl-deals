@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
-from vinyl_deals.domain import RawOffer, ScrapeResult
+from vinyl_deals.domain import RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
 
 
 class BaseStoreAdapter(ABC):
@@ -26,6 +26,19 @@ class BaseStoreAdapter(ABC):
 
     def get_changed_products(self) -> ScrapeResult:
         return self.get_catalog()
+
+    def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
+        """Targeted public search.  Adapters must never fall back to a full crawl.
+
+        Stores which do not publish a usable search surface report DEGRADED;
+        the federated service then uses its persisted cache for that source.
+        """
+        return StoreSearchResult(
+            self.source,
+            (),
+            StoreState.DEGRADED,
+            ("Public targeted search is not available for this source.",),
+        )
 
     def get_product(self, source_product_id: str) -> RawOffer | None:
         return None

@@ -21,6 +21,7 @@ def main() -> int:
     deals = commands.add_parser("deals", help="Evaluate matched release offers"); deals.add_argument("--database", type=Path, default=default_database); deals.add_argument("--min-class", default="NORMAL", choices=["NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); deals.add_argument("--include-insufficient", action="store_true", help="Include historical-only signals with insufficient market data"); deals.add_argument("--limit", type=int, default=50); deals.add_argument("--release-id", type=int); deals.add_argument("--local", action="store_true", help="Show only local-store offers"); deals.add_argument("--city"); deals.add_argument("--pickup", action="store_true", help="Show only offers with confirmed pickup")
     local = commands.add_parser("local", help="Show fresh local offers and transparent effective prices"); local.add_argument("--database", type=Path, default=default_database); local.add_argument("--city", default="Ростов-на-Дону"); local.add_argument("--pickup", action="store_true"); local.add_argument("--limit", type=int, default=50)
     search = commands.add_parser("search", help="Search matched releases and their current offers"); search.add_argument("--database", type=Path, default=default_database); search.add_argument("--artist"); search.add_argument("--title"); search.add_argument("--barcode"); search.add_argument("--catalog"); search.add_argument("--label"); search.add_argument("--year", type=int); search.add_argument("--format")
+    live = commands.add_parser("live-search", help="Search public store search pages concurrently"); live.add_argument("--database", type=Path, default=default_database); live.add_argument("--artist"); live.add_argument("--title"); live.add_argument("--barcode"); live.add_argument("--catalog"); live.add_argument("--per-store-timeout", type=float, default=15); live.add_argument("--global-timeout", type=float, default=45); live.add_argument("--enrichment-limit", type=int, default=10)
     watch = commands.add_parser("watchlist", help="Manage tracked releases"); watch.add_argument("--database", type=Path, default=default_database); watch_commands = watch.add_subparsers(dest="watch_command", required=True)
     watch_commands.add_parser("list")
     watch_add = watch_commands.add_parser("add"); watch_add.add_argument("release_id", type=int); watch_add.add_argument("--max-price", type=Decimal); watch_add.add_argument("--min-class", choices=["NORMAL", "INTERESTING", "GOOD", "HOT", "VERY_HOT"]); watch_add.add_argument("--local", action="store_true"); watch_add.add_argument("--city"); watch_add.add_argument("--pickup", action="store_true")
@@ -162,6 +163,27 @@ def main() -> int:
             if result.discogs_url:
                 print(f"\nDiscogs: {result.discogs_url}")
             print()
+        return 0
+    if args.command == "live-search":
+        from vinyl_deals.domain import StoreSearchQuery
+        from vinyl_deals.live_search import live_search
+        query = StoreSearchQuery(args.artist, args.title, args.barcode, args.catalog)
+        try:
+            result = live_search(
+                SQLiteRepository(args.database), query,
+                per_store_timeout=args.per_store_timeout, global_timeout=args.global_timeout,
+                enrichment_limit=args.enrichment_limit,
+                progress=lambda item: print(f"{item.source}: {'✓ ' + str(item.offers) if item.state.value == 'active' else '⚠ DEGRADED'}"),
+            )
+        except ValueError as error:
+            print(f"Cannot run live search: {error}")
+            return 2
+        if not result.releases:
+            print("No releases found.")
+            return 0
+        for release in result.releases:
+            best = release.lowest_price_offer
+            print(f"{release.artist} — {release.title}\nLowest price: {best.store} — {best.price} RUB" if best else f"{release.artist} — {release.title}\nLowest price: unavailable")
         return 0
     factories = {"vinyl_ru": VinylRuAdapter, "rio_rostov": RioRostovAdapter, "droog_rostov": DroogRostovAdapter}
     paged_factories = {"imagine_club": ImagineClubAdapter, "collectomania": CollectomaniaAdapter, "audiomania": AudiomaniaAdapter, "respublica": RespublicaAdapter, "drhead": DrHeadAdapter, "vidika": VidikaAdapter, "maximum_vinyl": MaximumVinylAdapter, "vinylmarkt": VinylmarktAdapter, "vernoshop": VernoshopAdapter, "tishina": TishinaAdapter, "avsound": AVSoundAdapter, "pult": PultAdapter, "onlinetrade": OnlineTradeAdapter}

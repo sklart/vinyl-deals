@@ -5,6 +5,8 @@ from PySide6.QtTest import QTest
 
 from vinyl_deals.domain import Availability
 from vinyl_deals.gui.main_window import MainWindow
+from vinyl_deals.domain import StoreSearchQuery, StoreState
+from vinyl_deals.live_search import LiveSearchResult, LiveStoreResult
 from vinyl_deals.search import OfferSearchResult, ReleaseSearchResult
 
 
@@ -145,4 +147,24 @@ def test_worker_error_keeps_window_alive(qapp, tmp_path):
     assert window.search_button.isEnabled() and window.clear_button.isEnabled()
     assert all(field.isEnabled() for field in window.fields.values())
     assert not window.isHidden()
+    window.close()
+
+
+def test_live_search_reports_store_progress_and_renders_partial_result(qapp, tmp_path):
+    started, release_worker = Event(), Event()
+    item = release()
+    def live_service(_repository, query, *, progress):
+        progress(LiveStoreResult("Imagine Club", StoreState.ACTIVE, 3))
+        started.set(); release_worker.wait(1)
+        return LiveSearchResult(query, (item,), (LiveStoreResult("Imagine Club", StoreState.ACTIVE, 3),))
+    window = MainWindow(tmp_path / "live.sqlite3", live_search_service=live_service)
+    window.fields["artist"].setText("Opeth")
+    window.fields["title"].setText("Blackwater Park")
+    window.start_live_search()
+    assert wait_until(qapp, started.is_set)
+    assert "Imagine Club: ✓ 3" in window.status_label.text()
+    assert not window.search_button.isEnabled()
+    release_worker.set()
+    assert wait_until(qapp, lambda: window.search_button.isEnabled())
+    assert window.release_table.rowCount() == 1
     window.close()

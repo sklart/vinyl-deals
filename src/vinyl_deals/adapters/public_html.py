@@ -15,11 +15,11 @@ import json
 import re
 from time import sleep
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
-from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreState
+from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
 
 _UNSET = object()
 
@@ -32,6 +32,10 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
     catalog_url = ""
     catalog_urls: tuple[str, ...] = ()
     base_url = ""
+    # Conventional public search endpoint.  Store adapters override this when
+    # a different public path or query key is documented by their storefront.
+    search_path = "/search/"
+    search_parameter = "q"
     reports_catalog_progress = True
 
     def __init__(self, *, timeout_seconds: float = 20.0, page_limit: int | None = None, delay_seconds: float = 0.25) -> None:
@@ -65,6 +69,41 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
 
     def enrich_offer(self, offer: RawOffer) -> RawOffer:
         return self.parse_product_page(self._fetch(offer.url), offer)
+
+    def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
+        """Fetch one public search page; never enumerate the catalogue here."""
+        if query.is_empty():
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+        try:
+            html = self._fetch(self._search_url(query))
+            if self._is_blocked(html):
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} returned a CAPTCHA or access-check page; source paused.",))
+            offers = tuple(self._matching_search_cards(self.parse_listing(html), query))
+            return StoreSearchResult(self.source, offers)
+        except (HTTPError, URLError, OSError) as error:
+            status = getattr(error, "code", None)
+            detail = f"HTTP {status}" if status in {403, 429} else type(error).__name__
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} public search unavailable ({detail}).",))
+
+    def _search_url(self, query: StoreSearchQuery) -> str:
+        separator = "&" if "?" in self.search_path else "?"
+        return urljoin(self.base_url, self.search_path) + separator + urlencode({self.search_parameter: query.text()})
+
+    @staticmethod
+    def _matching_search_cards(offers: list[RawOffer], query: StoreSearchQuery) -> list[RawOffer]:
+        """Reject broad search suggestions that do not contain requested terms."""
+        needle = re.sub(r"\W+", "", query.barcode or query.catalog_number or "")
+        terms = [term.casefold() for term in (query.artist, query.title) if term]
+        filtered: list[RawOffer] = []
+        for offer in offers:
+            haystack = " ".join(value or "" for value in (offer.artist_raw, offer.title_raw, offer.barcode, offer.catalog_number_raw)).casefold()
+            compact = re.sub(r"\W+", "", haystack)
+            if needle and needle not in compact:
+                continue
+            if terms and not all(term in haystack for term in terms):
+                continue
+            filtered.append(offer)
+        return filtered
 
     def parse_listing(self, html: str, *, fetched_at: datetime | None = None) -> list[RawOffer]:
         timestamp = fetched_at or datetime.now(timezone.utc)

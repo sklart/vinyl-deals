@@ -179,6 +179,31 @@ class SQLiteRepository:
                 return [row[0] for row in connection.execute("SELECT id FROM offers WHERE release_id IS NOT NULL")]
             return [row[0] for row in connection.execute("SELECT id FROM offers WHERE release_id=?", (release_id,))]
 
+    def ensure_releases_for_unmatched_offers(self, offer_ids: list[int] | None = None) -> list[int]:
+        """Give isolated live-search cards a provisional Release.
+
+        Full catalogues historically created Releases only after a confirmed
+        pair.  A targeted query can legitimately return one store result, so
+        this makes it searchable without claiming that it matches another
+        pressing.  A later high-confidence pair may still merge it normally.
+        """
+        self.initialize()
+        with self._connect() as connection:
+            if offer_ids:
+                marks = ",".join("?" for _ in offer_ids)
+                rows = connection.execute(
+                    f"SELECT id FROM offers WHERE release_id IS NULL AND id IN ({marks})", offer_ids
+                ).fetchall()
+            else:
+                rows = connection.execute("SELECT id FROM offers WHERE release_id IS NULL").fetchall()
+            created: list[int] = []
+            for (offer_id,) in rows:
+                release_id = self._create_release_from_offer(connection, offer_id)
+                connection.execute("UPDATE offers SET release_id=? WHERE id=?", (release_id, offer_id))
+                self._refresh_release_metadata(connection, release_id)
+                created.append(release_id)
+            return created
+
     def releases_for_search(self) -> list[Release]:
         """Return canonical Release metadata for the search service."""
         self.initialize()

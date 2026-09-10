@@ -31,28 +31,34 @@ from PySide6.QtWidgets import (
 
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.build_metadata import metadata as build_metadata
+from vinyl_deals.domain import StoreSearchQuery
+from vinyl_deals.live_search import live_search
 from vinyl_deals.runtime import application_database_path, settings_path
 from vinyl_deals.scheduler import ALLOWED_INTERVALS, Scheduler
 from vinyl_deals.search import ReleaseSearchResult, search_releases
 from vinyl_deals.updates import refresh_catalogs
+from vinyl_deals.updates import STORE_LABELS
 
-from .workers import TaskWorker, UpdateWorker
+from .workers import LiveSearchWorker, TaskWorker, UpdateWorker
 
 
 class MainWindow(QMainWindow):
     """Native Qt shell that delegates search and updates to application services."""
 
-    def __init__(self, database: Path | str | None = None, *, search_service: Callable = search_releases, update_service: Callable = refresh_catalogs, url_opener: Callable[[QUrl], bool] = QDesktopServices.openUrl, scheduler_factory: Callable = Scheduler) -> None:
+    def __init__(self, database: Path | str | None = None, *, search_service: Callable = search_releases, live_search_service: Callable = live_search, update_service: Callable = refresh_catalogs, url_opener: Callable[[QUrl], bool] = QDesktopServices.openUrl, scheduler_factory: Callable = Scheduler) -> None:
         super().__init__()
         database_path = Path(database) if database is not None else application_database_path()
         self.repository = SQLiteRepository(database_path)
         self.settings = QSettings(str(settings_path(database_path)), QSettings.Format.IniFormat)
         self.search_service = search_service
+        self.live_search_service = live_search_service
         self.update_service = update_service
         self.url_opener = url_opener
         self.results: list[ReleaseSearchResult] = []
         self.selected_result: ReleaseSearchResult | None = None
         self._worker: UpdateWorker | None = None
+        self._live_worker: LiveSearchWorker | None = None
+        self._live_store_status: dict[str, str] = {}
         self._alert_worker: TaskWorker | None = None
         self._search_performed = False
         self._updating = False
@@ -77,7 +83,7 @@ class MainWindow(QMainWindow):
             field = QLineEdit()
             field.setObjectName(f"{key}_field")
             field.setPlaceholderText(label)
-            field.returnPressed.connect(self.perform_search)
+            field.returnPressed.connect(self.start_live_search)
             self.fields[key] = field
             form.addWidget(QLabel(label), index // 4 * 2, index % 4 * 2)
             form.addWidget(field, index // 4 * 2, index % 4 * 2 + 1)
@@ -110,7 +116,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(root, "Поиск")
         self.tabs.addTab(self._build_tracking_page(), "Отслеживание")
         self.setCentralWidget(self.tabs)
-        self.search_button.clicked.connect(self.perform_search)
+        self.search_button.clicked.connect(self.start_live_search)
         self.clear_button.clicked.connect(self.clear_search)
         self.refresh_button.clicked.connect(self.start_refresh)
         self.release_table.itemSelectionChanged.connect(self.select_release)
@@ -326,12 +332,13 @@ class MainWindow(QMainWindow):
         return bool(
             self._closing
             or (self._worker and self._worker.isRunning())
+            or (self._live_worker and self._live_worker.isRunning())
             or self.scheduler.running
             or (self._alert_worker and self._alert_worker.isRunning())
         )
 
     def _scheduler_start_allowed(self) -> bool:
-        return not self._closing and not (self._worker and self._worker.isRunning()) and not (self._alert_worker and self._alert_worker.isRunning())
+        return not self._closing and not (self._worker and self._worker.isRunning()) and not (self._live_worker and self._live_worker.isRunning()) and not (self._alert_worker and self._alert_worker.isRunning())
 
     def _alert_send_allowed(self) -> bool:
         return not self._maintenance_busy()
@@ -350,6 +357,8 @@ class MainWindow(QMainWindow):
         self.scheduler.shutdown()
         if self._worker and self._worker.isRunning():
             self._worker.wait()
+        if self._live_worker and self._live_worker.isRunning():
+            self._live_worker.wait()
         worker = self._alert_worker
         if worker and worker.isRunning():
             worker.wait()
@@ -371,6 +380,9 @@ class MainWindow(QMainWindow):
             return
         self._search_performed = True
         self.results = self.search_service(self.repository, **criteria)
+        self._render_search_results()
+
+    def _render_search_results(self) -> None:
         self.release_table.setRowCount(0)
         self.offer_table.setRowCount(0)
         self.selected_result = None
@@ -389,6 +401,58 @@ class MainWindow(QMainWindow):
         else:
             self.status_label.setText(f"Найдено релизов: {len(self.results)}")
             self.release_table.selectRow(0)
+
+    def start_live_search(self) -> None:
+        criteria = self._criteria()
+        if criteria is None:
+            return
+        query = StoreSearchQuery(
+            artist=str(criteria["artist"]) if criteria["artist"] else None,
+            title=str(criteria["title"]) if criteria["title"] else None,
+            barcode=str(criteria["barcode"]) if criteria["barcode"] else None,
+            catalog_number=str(criteria["catalog"]) if criteria["catalog"] else None,
+        )
+        if query.is_empty():
+            self.status_label.setText("Введите исполнителя и альбом, штрихкод или каталожный номер.")
+            return
+        if self._maintenance_busy():
+            return
+        self._search_performed = True
+        self._live_store_status = {}
+        self._set_updating(True)
+        self.status_label.setText("Поиск во всех магазинах...")
+        worker = LiveSearchWorker(self.repository, query, self.live_search_service)
+        self._live_worker = worker
+        worker.progress.connect(self._live_store_finished)
+        worker.completed.connect(self._live_search_completed)
+        worker.failed.connect(self._live_search_failed)
+        worker.finished.connect(self._live_search_finished)
+        worker.start()
+
+    def _live_store_finished(self, result: object) -> None:
+        source = str(getattr(result, "source", "магазин"))
+        label = STORE_LABELS.get(source, source)
+        offers = int(getattr(result, "offers", 0))
+        state = str(getattr(result, "state", "degraded"))
+        self._live_store_status[source] = f"{label}: {'✓ ' + str(offers) if state == 'active' else '⚠ DEGRADED'}"
+        self.status_label.setText("Поиск во всех магазинах:\n" + "\n".join(self._live_store_status.values()))
+
+    def _live_search_completed(self, result: object) -> None:
+        self.results = list(getattr(result, "releases", ()))
+        self._render_search_results()
+        possible = len(getattr(result, "possible_matches", ()))
+        suffix = f"; возможных совпадений: {possible}" if possible else ""
+        self.status_label.setText(f"Найдено релизов: {len(self.results)}{suffix}")
+
+    def _live_search_failed(self, message: str) -> None:
+        self.status_label.setText(f"Ошибка live-поиска: {message}")
+
+    def _live_search_finished(self) -> None:
+        worker = self._live_worker
+        self._live_worker = None
+        if worker:
+            worker.deleteLater()
+        self._set_updating(False)
 
     def clear_search(self) -> None:
         for field in self.fields.values():
