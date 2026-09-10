@@ -27,7 +27,11 @@ def test_public_catalogue_card_parsing_and_stable_sku(adapter_type, source, sku)
     filename = "production_listing.html" if source == "vidika" else "listing.html"
     html = (FIXTURES / source / filename).read_text(encoding="utf-8")
     offer = adapter.parse_listing(html, fetched_at=datetime(2026, 9, 10, tzinfo=timezone.utc))[0]
-    assert offer.source == source and offer.source_product_id == sku and offer.store_sku == sku
+    assert offer.source == source and offer.source_product_id == sku
+    if source == "vidika":
+        assert offer.store_sku == "1268" and offer.raw_data["vidika_sku_id"] == "3700"
+    else:
+        assert offer.store_sku == sku
     assert offer.artist_raw == "Opeth" and offer.title_raw.startswith("Blackwater Park")
     assert offer.price is not None and offer.availability == Availability.IN_STOCK
     assert offer.catalog_number_raw is None
@@ -84,6 +88,29 @@ def test_vidika_enumerates_both_real_category_roots_with_a_safe_limit(monkeypatc
     assert all("/catalog/" not in url for url in seen)
 
 
+def test_vidika_aggregates_multi_root_page_limit_warnings_and_errors(monkeypatch):
+    adapter = VidikaAdapter(page_limit=1, delay_seconds=0)
+    listing = (FIXTURES / "vidika" / "production_listing.html").read_text(encoding="utf-8") + '<a href="?page=2">2</a>'
+    monkeypatch.setattr(adapter, "_fetch", lambda _url: listing)
+    result = adapter.get_catalog()
+    assert result.pages_processed == 2 and len(result.offers) == 1
+    assert len(result.warnings) == 2
+    assert all("limited" in warning for warning in result.warnings)
+    assert result.errors == ()
+
+
+def test_maximum_vinyl_real_catalogue_fragment_has_stable_ids_and_isolated_cards():
+    adapter = MaximumVinylAdapter()
+    html = (FIXTURES / "maximum_vinyl" / "production_listing.html").read_text(encoding="utf-8")
+    offers = adapter.parse_listing(html)
+    assert [(offer.source_product_id, offer.title_raw, offer.price, offer.availability) for offer in offers] == [
+        ("20667", "The Good Earth LP", pytest.approx(3490), Availability.IN_STOCK),
+        ("20668", "Blackwater Park (2LP)", pytest.approx(5100), Availability.IN_STOCK),
+    ]
+    assert offers[0].url.endswith("manfred-mann-good-earth-lp")
+    assert adapter._page_url(2).endswith("?page=2")
+
+
 @pytest.mark.parametrize("name, expected", [
     ("Виниловая пластинка Opeth - Blackwater Park (LP)", True), ("Opeth - Blackwater Park (LP+CD)", True),
     ("Opeth - Blackwater Park Audio CD", False), ("Opeth vinyl sticker DVD", False), ("Кассета Opeth", False),
@@ -99,6 +126,16 @@ def test_onlinetrade_fixture_filters_mixed_catalogue_and_keeps_sku():
     # product property; mixed non-vinyl media stay out.
     assert [offer.source_product_id for offer in offers] == ["ot-vinyl", "ot-hybrid", "ot-url", "ot-property"]
     assert all(offer.catalog_number_raw is None for offer in offers)
+
+
+def test_onlinetrade_representative_catalogue_filters_mixed_media_and_access_check(monkeypatch):
+    adapter = OnlineTradeAdapter(delay_seconds=0)
+    html = (FIXTURES / "onlinetrade" / "production_catalogue.html").read_text(encoding="utf-8")
+    assert [offer.source_product_id for offer in adapter.parse_listing(html)] == ["ot-real-vinyl", "ot-real-hybrid"]
+    monkeypatch.setattr(adapter, "_fetch", lambda _url: (FIXTURES / "onlinetrade" / "access_check.html").read_text(encoding="utf-8"))
+    result = adapter.get_catalog()
+    assert result.state == StoreState.DEGRADED
+    assert "captcha" in result.warnings[0].casefold() or "access-check" in result.warnings[0].casefold()
 
 
 def test_structured_properties_take_priority_and_do_not_bleed_into_neighbours():

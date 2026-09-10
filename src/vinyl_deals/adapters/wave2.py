@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from urllib.error import HTTPError, URLError
 
@@ -28,6 +29,8 @@ class VidikaAdapter(PublicHtmlVinylAdapter):
             url = self._first(r'(?:data-href|<a\s+href)=["\']([^"\']+)', block, re.I)
             name = self._first(r'products__item-info-name["\'][^>]*>(.*?)</span>', block, re.I | re.S)
             product_id = self._first(r'name=["\']product_id["\']\s+value=["\'](\d+)', block, re.I)
+            sku_id = self._first(r'name=["\']sku_id["\']\s+value=["\'](\d+)', block, re.I)
+            article = self._first(r'products__code-v["\'][^>]*>(.*?)</span>', block, re.I | re.S)
             price = self._money(self._first(r'products__pr-price-new.*?<span\s+class=["\']price["\']>(.*?)</span>', block, re.I | re.S))
             offer = self._product_from_values(
                 name=self._text(name), url=url, product_id=product_id, price=price,
@@ -35,19 +38,34 @@ class VidikaAdapter(PublicHtmlVinylAdapter):
                 raw_data={"html_card": True, "vidika_products_item": True},
             )
             if offer:
-                offers.append(offer)
+                # Webasyst has three distinct identifiers.  product_id is
+                # the immutable source key, the human-facing Артикул is a
+                # store SKU, and sku_id remains diagnostic raw data only.
+                offers.append(replace(
+                    offer,
+                    store_sku=self._text(article) or None,
+                    raw_data={**offer.raw_data, "vidika_sku_id": sku_id or None},
+                ))
         return offers
 
     def get_catalog(self):
         original, offers, processed = self.catalog_url, [], 0
+        warnings, errors = [], []
+        degraded = False
         try:
             for root in self.catalog_urls:
                 self.catalog_url = root
                 result = super().get_catalog()
-                if result.state != StoreState.ACTIVE:
-                    return result
-                offers.extend(result.offers); processed += result.pages_processed
-            return ScrapeResult(tuple({item.source_product_id: item for item in offers}.values()), pages_processed=processed)
+                warnings.extend(result.warnings)
+                errors.extend(result.errors)
+                offers.extend(result.offers)
+                processed += result.pages_processed
+                degraded = degraded or result.state != StoreState.ACTIVE
+            return ScrapeResult(
+                tuple({item.source_product_id: item for item in offers}.values()),
+                StoreState.DEGRADED if degraded else StoreState.ACTIVE,
+                tuple(warnings), processed, tuple(errors),
+            )
         finally:
             self.catalog_url = original
 
