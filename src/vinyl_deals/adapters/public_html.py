@@ -20,7 +20,7 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
-from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
+from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 from vinyl_deals.matching.normalize import text
 
 _UNSET = object()
@@ -40,6 +40,9 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
     search_path: str | None = None
     search_parameter = "q"
     targeted_search_reason = "No verified public targeted-search endpoint is available for this store."
+    # Generic pages may contain both new and used merchandise.  Individual
+    # adapters can opt in only after their public cards/category guarantee it.
+    default_condition_media: str | None = None
     reports_catalog_progress = True
 
     def __init__(self, *, timeout_seconds: float = 20.0, page_limit: int | None = None, delay_seconds: float = 0.25) -> None:
@@ -77,19 +80,19 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
     def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
         """Fetch one public search page; never enumerate the catalogue here."""
         if query.is_empty():
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",), status=StoreSearchStatus.ERROR)
         if not self.search_path:
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} has no verified public targeted-search endpoint. {self.targeted_search_reason}",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} has no verified public targeted-search endpoint. {self.targeted_search_reason}",), status=StoreSearchStatus.UNSUPPORTED)
         try:
             html = self._fetch(self._search_url(query))
             if self._is_blocked(html):
-                return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} returned a CAPTCHA or access-check page; source paused.",))
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} returned a CAPTCHA or access-check page; source paused.",), status=StoreSearchStatus.RESTRICTED)
             offers = tuple(self._matching_search_cards(self.parse_listing(html), query))
-            return StoreSearchResult(self.source, offers)
+            return StoreSearchResult(self.source, offers, status=StoreSearchStatus.FOUND if offers else StoreSearchStatus.EMPTY)
         except (HTTPError, URLError, OSError) as error:
             status = getattr(error, "code", None)
             detail = f"HTTP {status}" if status in {403, 429} else type(error).__name__
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} public search unavailable ({detail}).",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} public search unavailable ({detail}).",), status=StoreSearchStatus.RESTRICTED if status in {403, 429} else StoreSearchStatus.ERROR)
 
     def _search_url(self, query: StoreSearchQuery) -> str:
         assert self.search_path
@@ -104,12 +107,12 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
         candidate list, and product-page enrichment remains bounded upstream.
         """
         if query.is_empty():
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",), status=StoreSearchStatus.ERROR)
         url = f"{self.base_url}/index.php?{urlencode({'route': 'common/search/ajaxLiveSearch', 'filter_name': query.text(), 'filter_category_id': category_id})}"
         try:
             payload = json.loads(self._fetch(url))
             if not isinstance(payload, list):
-                return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} search returned an unexpected payload.",))
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} search returned an unexpected payload.",), status=StoreSearchStatus.ERROR)
             timestamp = datetime.now(timezone.utc)
             offers: list[RawOffer] = []
             for item in payload[:20]:
@@ -130,10 +133,10 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
                 )
                 if offer:
                     offers.append(replace(offer, price=price) if unavailable else offer)
-            return StoreSearchResult(self.source, tuple(offers))
+            return StoreSearchResult(self.source, tuple(offers), status=StoreSearchStatus.FOUND if offers else StoreSearchStatus.EMPTY)
         except (HTTPError, URLError, OSError, json.JSONDecodeError) as error:
             detail = f"HTTP {error.code}" if isinstance(error, HTTPError) else type(error).__name__
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} public search unavailable ({detail}).",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} public search unavailable ({detail}).",), status=StoreSearchStatus.RESTRICTED if isinstance(error, HTTPError) and error.code in {403, 429} else StoreSearchStatus.ERROR)
 
     @staticmethod
     def _matching_search_cards(offers: list[RawOffer], query: StoreSearchQuery) -> list[RawOffer]:
@@ -275,7 +278,9 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
         return RawOffer(source=self.source, source_product_id=stable_id, store_sku=resolved_sku, url=absolute_url,
             fetched_at=timestamp, artist_raw=artist, title_raw=title, price=price,
             availability=Availability.OUT_OF_STOCK if unavailable else Availability.IN_STOCK if available else Availability.UNKNOWN,
-            barcode=barcode, format=self._format(name), condition_media="UNKNOWN", condition_sleeve="UNKNOWN", raw_data=raw_data)
+            barcode=barcode, format=self._format(name),
+            condition_media=self.default_condition_media or "UNKNOWN",
+            condition_sleeve=self.default_condition_media or "UNKNOWN", raw_data=raw_data)
 
     def _page_url(self, page: int) -> str:
         """Override per store when its public catalogue uses another query key."""

@@ -144,3 +144,19 @@ def test_repair_metadata_cleans_legacy_fields_and_rebuilds(tmp_path):
     repaired = repository.offers_for_matching()[0][1]
     assert repaired.catalog_number_raw is None and repaired.label is None
     assert (repaired.format, repaired.disc_count, repaired.barcode) == ("LP", 2, "00602445599691")
+
+
+def test_repair_metadata_removes_short_description_disguised_as_label(tmp_path):
+    repository = SQLiteRepository(tmp_path / "repair-label.sqlite3")
+    repository.upsert_offer(offer("one", "1"))
+    legacy = replace(
+        repository.offers_for_matching()[0][1],
+        label="UMC, \u0433\u043e\u0434 \u0438\u0437\u0434\u0430\u043d\u0438\u044f 2022, \u0441\u0442\u0440\u0430\u043d\u0430 \u0412\u0435\u043b\u0438\u043a\u043e\u0431\u0440\u0438\u0442\u0430\u043d\u0438\u044f, \u0444\u043e\u0440\u043c\u0430\u0442 LP",
+    )
+    with repository._connect() as connection:
+        connection.execute(
+            "UPDATE offers SET label=?, offer_json=? WHERE id=1",
+            (legacy.label, __import__("vinyl_deals.database.repository", fromlist=["_serialize_offer"])._serialize_offer(legacy)),
+        )
+    assert repository.repair_metadata() == 1
+    assert repository.offers_for_matching()[0][1].label is None

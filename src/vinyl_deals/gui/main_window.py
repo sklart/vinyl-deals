@@ -464,7 +464,7 @@ class MainWindow(QMainWindow):
         kind = str(getattr(result, "status_kind", "error"))
         marker = {
             "found": f"✓ {offers}", "empty": "0 результатов", "cached": f"↻ Кэш {offers}",
-            "unsupported": "ⓘ Нет live-search адаптера", "restricted": "⚠ 403/CAPTCHA",
+            "unsupported": "ⓘ Live-search не поддерживается", "restricted": "⚠ Доступ ограничен",
             "timeout": "⌛ Таймаут", "error": "✕ Ошибка",
         }.get(kind, "✕ Ошибка")
         self._live_store_status[source] = f"{label}: {marker}"
@@ -581,7 +581,8 @@ class MainWindow(QMainWindow):
             row = self.offer_table.rowCount()
             self.offer_table.insertRow(row)
             availability = "В наличии" if offer.availability.value == "in_stock" else "Нет в наличии" if offer.availability.value == "out_of_stock" else "Неизвестно"
-            store = f"📍 {offer.store}" if offer.local_store else offer.store
+            store_label = STORE_LABELS.get(offer.store, offer.store)
+            store = f"📍 {store_label}" if offer.local_store else store_label
             effective = f"{offer.effective_price} RUB" if offer.effective_price_known and offer.effective_price is not None else "?"
             pickup = "Да" if offer.pickup_available else "Нет"
             discount = f"{offer.discount_pct:.0f}%" if offer.discount_pct is not None else "-"
@@ -617,13 +618,25 @@ class MainWindow(QMainWindow):
             self._money(result.market_median),
             f"{result.discount_pct:.1f}%" if result.discount_pct is not None else "—",
             str(result.offer_count), str(result.store_count),
-            "Требует проверки" if result.has_possible_matches else "Подтверждено",
+            self._release_match_status(result),
             discogs_value,
         )
 
+    @staticmethod
+    def _release_match_status(result: ReleaseSearchResult) -> str:
+        if result.discogs_confidence:
+            return "Подтверждено"
+        if result.has_possible_matches:
+            return "Возможное совпадение"
+        # Multiple shops linked by a validated GTIN or catalogue+label are
+        # strong store evidence.  A lone/sparse result is deliberately not.
+        if result.offer_count >= 2 and (result.barcode or (result.catalog_number and result.label)):
+            return "Подтверждено"
+        return "Не подтверждено / одиночное предложение"
+
     def _summary_text(self, result: ReleaseSearchResult) -> str:
         best = result.lowest_price_offer
-        best_text = f"{self._money(best.price)} · {best.store}" if best else "—"
+        best_text = f"{self._money(best.price)} · {STORE_LABELS.get(best.store, best.store)}" if best else "—"
         effective = self._money(result.best_effective_offer.effective_price) if result.best_effective_offer and result.best_effective_offer.effective_price_known else "—"
         if result.market_median is None or result.discount_pct is None:
             assessment = "Медиана: — · Выгода: — · Оценка: недостаточно данных"

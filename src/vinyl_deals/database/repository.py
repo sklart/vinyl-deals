@@ -45,7 +45,12 @@ def _clean_offer_metadata(offer: RawOffer) -> RawOffer:
     label = offer.label.strip() if offer.label else None
     catalog = offer.catalog_number_raw.strip() if offer.catalog_number_raw else None
     fmt = offer.format.strip() if offer.format else None
-    if label and (len(label) > 120 or any(marker in label.casefold() for marker in ("страна:", "описание", "характеристик"))):
+    label_text = label.casefold() if label else ""
+    metadata_markers = (
+        "\u0441\u0442\u0440\u0430\u043d\u0430", "\u0433\u043e\u0434 \u0438\u0437\u0434\u0430\u043d\u0438\u044f",
+        "\u0444\u043e\u0440\u043c\u0430\u0442", "\u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0435", "\u0445\u0430\u0440\u0430\u043a\u0442\u0435\u0440\u0438\u0441\u0442\u0438\u043a",
+    )
+    if label and (len(label) > 120 or sum(marker in label_text for marker in metadata_markers) >= 2):
         label = None
     if catalog and offer.store_sku and catalog.casefold() == offer.store_sku.strip().casefold():
         catalog = None

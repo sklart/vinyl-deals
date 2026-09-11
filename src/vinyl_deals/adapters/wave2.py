@@ -7,7 +7,7 @@ from dataclasses import replace
 from urllib.error import HTTPError, URLError
 
 from vinyl_deals.adapters.public_html import PublicHtmlVinylAdapter
-from vinyl_deals.domain import ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
+from vinyl_deals.domain import ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 
 
 class VidikaAdapter(PublicHtmlVinylAdapter):
@@ -16,6 +16,7 @@ class VidikaAdapter(PublicHtmlVinylAdapter):
     catalog_urls = ("https://vidika.su/category/zarubezhnyy-vinil/", "https://vidika.su/category/russkiy-vinil/")
     # Public Webasyst header form: GET /search/?query=… .
     search_path, search_parameter = "/search/", "query"
+    default_condition_media = "NEW"
     def _page_url(self, page, **_kwargs): return f"{self.catalog_url}?page={page}"
 
     def _html_cards(self, html, timestamp):
@@ -121,6 +122,7 @@ class VinylmarktAdapter(PublicHtmlVinylAdapter):
     catalog_url, base_url = "https://vinylmarkt.ru/catalog/vinilovye_plastinki/", "https://vinylmarkt.ru"
     # Public Bitrix header form: GET /catalog/?q=… .
     search_path, search_parameter = "/catalog/", "q"
+    default_condition_media = "NEW"
 
 
 class VernoshopAdapter(PublicHtmlVinylAdapter):
@@ -137,6 +139,7 @@ class TishinaAdapter(PublicHtmlVinylAdapter):
     catalog_url, base_url = "https://msk.tishina.shop/catalog/vinilovye-plastinki/", "https://msk.tishina.shop"
     # The public header declares ``type=catalog`` alongside the query.
     search_path, search_parameter = "/catalog/?type=catalog", "q"
+    default_condition_media = "NEW"
 
 
 class AVSoundAdapter(PublicHtmlVinylAdapter):
@@ -144,12 +147,14 @@ class AVSoundAdapter(PublicHtmlVinylAdapter):
     catalog_url, base_url = "https://avsound.ru/catalog/vinyls/vinilovye-plastinki/ar/", "https://avsound.ru"
     # Public Bitrix header form: GET /catalog/?q=… .
     search_path, search_parameter = "/catalog/", "q"
+    default_condition_media = "NEW"
 
 
 class OnlineTradeAdapter(PublicHtmlVinylAdapter):
     source, store_name = "onlinetrade", "OnlineTrade"
     targeted_search_reason = "OnlineTrade has no verified public targeted-search endpoint."
     catalog_url, base_url = "https://www.onlinetrade.ru/catalogue/vinilovye_plastinki_cd_blu_ray_kassety-c3594/", "https://www.onlinetrade.ru"
+    default_condition_media = "NEW"
 
     @staticmethod
     def _looks_like_vinyl(value: str) -> bool:
@@ -171,6 +176,13 @@ class PultAdapter(PublicHtmlVinylAdapter):
     source, store_name = "pult", "Pult.ru"
     targeted_search_reason = "Pult.ru's public search is access-restricted; no bypass is attempted."
     catalog_url, base_url = "https://www.pult.ru/catalog/vinilovye-plastinki/", "https://www.pult.ru"
+
+    def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
+        return StoreSearchResult(
+            self.source, (), StoreState.DEGRADED,
+            (self.targeted_search_reason,),
+            status=StoreSearchStatus.RESTRICTED,
+        )
 
     def get_catalog(self) -> ScrapeResult:
         try:

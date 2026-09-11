@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
-from vinyl_deals.domain import RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
+from vinyl_deals.domain import RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 
 
 class BaseStoreAdapter(ABC):
@@ -43,6 +43,7 @@ class BaseStoreAdapter(ABC):
             (),
             StoreState.DEGRADED,
             (reason,),
+            status=StoreSearchStatus.UNSUPPORTED,
         )
 
     def get_product(self, source_product_id: str) -> RawOffer | None:

@@ -19,7 +19,7 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
-from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
+from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 
 
 class VinylRuAdapter(BaseStoreAdapter):
@@ -58,11 +58,11 @@ class VinylRuAdapter(BaseStoreAdapter):
         never downloaded as a live-search fallback.
         """
         if query.is_empty():
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",), status=StoreSearchStatus.ERROR)
         try:
             payload = json.loads(self._fetch_text(f"{self.search_url}?{urlencode({'term': query.text()})}"))
             if not isinstance(payload, list):
-                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Vinyl.ru autocomplete returned an unexpected payload.",))
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Vinyl.ru autocomplete returned an unexpected payload.",), status=StoreSearchStatus.ERROR)
             offers: list[RawOffer] = []
             seen: set[str] = set()
             for item in payload[:10]:
@@ -77,10 +77,10 @@ class VinylRuAdapter(BaseStoreAdapter):
                 seen.add(url)
                 offers.extend(self._parse_search_page(self._fetch_text(url)))
             unique = {offer.source_product_id: offer for offer in offers}
-            return StoreSearchResult(self.source, tuple(unique.values()))
+            return StoreSearchResult(self.source, tuple(unique.values()), status=StoreSearchStatus.FOUND if unique else StoreSearchStatus.EMPTY)
         except (HTTPError, URLError, OSError, json.JSONDecodeError) as error:
             detail = f"HTTP {error.code}" if isinstance(error, HTTPError) else type(error).__name__
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Vinyl.ru public search unavailable ({detail}).",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Vinyl.ru public search unavailable ({detail}).",), status=StoreSearchStatus.RESTRICTED if getattr(error, "code", None) in {403, 429} else StoreSearchStatus.ERROR)
 
     def _parse_search_page(self, html: str, *, fetched_at: datetime | None = None) -> list[RawOffer]:
         timestamp = fetched_at or datetime.now(timezone.utc)

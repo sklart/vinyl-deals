@@ -13,7 +13,7 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
-from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
+from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 
 
 class DrHeadAdapter(BaseStoreAdapter):
@@ -52,14 +52,15 @@ class DrHeadAdapter(BaseStoreAdapter):
     def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
         """Public Doctorhead header form: GET /search/?q=… ."""
         if query.is_empty():
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",), status=StoreSearchStatus.ERROR)
         try:
             html = self._fetch(f"{self.base_url}/search/?{urlencode({'q': query.text()})}")
             if self._is_blocked(html):
-                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Dr.Head returned a CAPTCHA/access-check page.",))
-            return StoreSearchResult(self.source, tuple(self.parse_listing(html)))
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Dr.Head returned a CAPTCHA/access-check page.",), status=StoreSearchStatus.RESTRICTED)
+            offers = tuple(self.parse_listing(html))
+            return StoreSearchResult(self.source, offers, status=StoreSearchStatus.FOUND if offers else StoreSearchStatus.EMPTY)
         except (HTTPError, URLError, OSError) as error:
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Dr.Head public search unavailable ({getattr(error, 'code', type(error).__name__)}).",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Dr.Head public search unavailable ({getattr(error, 'code', type(error).__name__)}).",), status=StoreSearchStatus.RESTRICTED if getattr(error, "code", None) in {403, 429} else StoreSearchStatus.ERROR)
 
     def enrich_offer(self, offer: RawOffer) -> RawOffer:
         return self.parse_product_page(self._fetch(offer.url), offer)

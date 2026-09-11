@@ -10,7 +10,7 @@ from vinyl_deals.adapters.collectomania import CollectomaniaAdapter
 from vinyl_deals.adapters.drhead import DrHeadAdapter
 from vinyl_deals.adapters.imagine_club import ImagineClubAdapter
 from vinyl_deals.adapters.wave2 import MaximumVinylAdapter
-from vinyl_deals.domain import Availability, RawOffer, StoreSearchQuery, StoreSearchResult, StoreState
+from vinyl_deals.domain import Availability, RawOffer, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.live_search import LiveStoreResult, _rank_live_offers, live_search
 from vinyl_deals.matching.normalize import normalize_barcode
@@ -59,11 +59,11 @@ def test_live_search_runs_stores_in_parallel_persists_and_matches(tmp_path):
 def test_live_statuses_explain_why_a_store_has_no_results():
     assert LiveStoreResult("one", StoreState.ACTIVE, 6).status_kind == "found"
     assert LiveStoreResult("one", StoreState.ACTIVE, 0).status_kind == "empty"
-    assert LiveStoreResult("one", StoreState.DEGRADED, 4, cached=True).status_kind == "cached"
-    assert LiveStoreResult("one", StoreState.DEGRADED, 0, warnings=("no verified live-search endpoint",)).status_kind == "unsupported"
-    assert LiveStoreResult("one", StoreState.DEGRADED, 0, errors=("HTTP 403 CAPTCHA",)).status_kind == "restricted"
-    assert LiveStoreResult("one", StoreState.DEGRADED, 0, errors=("live search timed out",)).status_kind == "timeout"
-    assert LiveStoreResult("one", StoreState.DEGRADED, 0, errors=("network error",)).status_kind == "error"
+    assert LiveStoreResult("one", StoreState.DEGRADED, 4, status=StoreSearchStatus.CACHED).status_kind == "cached"
+    assert LiveStoreResult("one", StoreState.DEGRADED, 0, status=StoreSearchStatus.UNSUPPORTED).status_kind == "unsupported"
+    assert LiveStoreResult("one", StoreState.DEGRADED, 0, status=StoreSearchStatus.RESTRICTED).status_kind == "restricted"
+    assert LiveStoreResult("one", StoreState.DEGRADED, 0, status=StoreSearchStatus.TIMEOUT).status_kind == "timeout"
+    assert LiveStoreResult("one", StoreState.DEGRADED, 0, status=StoreSearchStatus.ERROR).status_kind == "error"
 
 
 def test_live_ranking_happens_before_detail_enrichment_limit():

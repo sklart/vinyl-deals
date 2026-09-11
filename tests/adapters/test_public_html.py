@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 from hashlib import sha256
 
 from vinyl_deals.adapters.public_html import PublicHtmlVinylAdapter
-from vinyl_deals.domain import Availability, RawOffer, StoreSearchQuery
+from vinyl_deals.domain import Availability, RawOffer, StoreSearchQuery, StoreSearchStatus
+from vinyl_deals.adapters.wave2 import TishinaAdapter
 
 
 class _Adapter(PublicHtmlVinylAdapter):
@@ -62,6 +63,18 @@ def test_unconfigured_html_adapter_refuses_unverified_generic_search():
     result = Unconfigured().search_offers(StoreSearchQuery(title="Communique"))
     assert result.state.value == "degraded"
     assert "no verified" in result.warnings[0]
+    assert result.status == StoreSearchStatus.UNSUPPORTED
+
+
+def test_verified_new_store_can_opt_into_new_condition_without_changing_generic_parser():
+    generic = _Adapter().parse_listing(_json_product('{"@type":"Product","name":"Vinyl Opeth - Blackwater Park LP","url":"/vinyl/opeth","sku":"SHOP-42","offers":{"price":"5000"}}'))[0]
+    assert generic.condition_media == "UNKNOWN"
+    adapter = TishinaAdapter()
+    new = adapter._product_from_values(
+        name="Виниловая пластинка Opeth - Blackwater Park LP", url="/vinyl/opeth", product_id="42",
+        price=5000, availability_value="В наличии", timestamp=datetime(2026, 9, 10, tzinfo=timezone.utc), raw_data={},
+    )
+    assert new is not None and new.condition_media == new.condition_sleeve == "NEW"
 
 
 def test_captcha_script_on_a_normal_bitrix_page_is_not_treated_as_a_block() -> None:

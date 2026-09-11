@@ -5,7 +5,7 @@ from PySide6.QtTest import QTest
 
 from vinyl_deals.domain import Availability
 from vinyl_deals.gui.main_window import MainWindow
-from vinyl_deals.domain import StoreSearchQuery, StoreState
+from vinyl_deals.domain import StoreSearchQuery, StoreSearchStatus, StoreState
 from vinyl_deals.live_search import LiveSearchResult, LiveStoreResult
 from vinyl_deals.search import OfferSearchResult, ReleaseSearchResult
 from vinyl_deals.pricing import DealClass
@@ -225,9 +225,22 @@ def test_gui_uses_human_store_labels_and_keeps_possible_out_of_discogs_column(qa
     )
     window = MainWindow(tmp_path / "labels.sqlite3", search_service=lambda *_args, **_kwargs: [item])
     window.perform_search()
-    assert window.release_table.item(0, 13).text() == "Требует проверки"
+    assert window.release_table.item(0, 13).text() == "Возможное совпадение"
     assert "possible" not in window.release_table.item(0, 14).text().casefold()
     report = LiveStoreResult("tishina", StoreState.ACTIVE, 0)
     window._live_store_finished(report)
     assert "Тишина: 0 результатов" in window.status_label.text()
+    window.close()
+
+
+def test_gui_localizes_raw_store_ids_and_structured_statuses(qapp, tmp_path):
+    raw_offer = offer(1, "vinyl_ru", 5000)
+    item = ReleaseSearchResult(7, "Pink Floyd", "Animals", None, None, None, None, "LP", (raw_offer,), None, None, raw_offer, None)
+    window = MainWindow(tmp_path / "status.sqlite3", search_service=lambda *_args, **_kwargs: [item])
+    window.perform_search()
+    assert window.offer_table.item(0, 0).text() == "Vinyl.ru"
+    window._live_store_finished(LiveStoreResult("pult", StoreState.DEGRADED, 0, status=StoreSearchStatus.RESTRICTED))
+    assert "Pult.ru (публичный каталог ограничен): ⚠ Доступ ограничен" in window.status_label.text()
+    window._live_store_finished(LiveStoreResult("rio_rostov", StoreState.DEGRADED, 0, status=StoreSearchStatus.UNSUPPORTED))
+    assert "РИО: ⓘ Live-search не поддерживается" in window.status_label.text()
     window.close()

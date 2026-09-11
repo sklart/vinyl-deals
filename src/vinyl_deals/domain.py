@@ -20,6 +20,23 @@ class StoreState(StrEnum):
     DEGRADED = "degraded"
 
 
+class StoreSearchStatus(StrEnum):
+    """Structured outcome of a targeted store search.
+
+    ``StoreState`` remains useful for persistence, while this value is what a
+    person needs to understand in the GUI.  It deliberately never depends on
+    parsing an English warning message.
+    """
+
+    FOUND = "found"
+    EMPTY = "empty"
+    CACHED = "cached"
+    UNSUPPORTED = "unsupported"
+    RESTRICTED = "restricted"
+    TIMEOUT = "timeout"
+    ERROR = "error"
+
+
 @dataclass(frozen=True, slots=True)
 class StoreSearchQuery:
     """A small, store-neutral query for a targeted public product search."""
@@ -123,3 +140,4 @@ class StoreSearchResult:
     state: StoreState = StoreState.ACTIVE
     warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
+    status: StoreSearchStatus | None = None

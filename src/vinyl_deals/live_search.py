@@ -8,7 +8,7 @@ from time import monotonic
 from typing import Callable
 
 from vinyl_deals.database.repository import SQLiteRepository
-from vinyl_deals.domain import RawOffer, StoreSearchQuery, StoreSearchResult, StoreState
+from vinyl_deals.domain import RawOffer, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 from vinyl_deals.matching.normalize import catalog_number, normalize_barcode, text
 from vinyl_deals.matching.service import build_match_queue
 from vinyl_deals.search import ReleaseSearchResult, search_releases
@@ -24,22 +24,20 @@ class LiveStoreResult:
     errors: tuple[str, ...] = ()
     cached: bool = False
     releases: tuple[ReleaseSearchResult, ...] = ()
+    status: StoreSearchStatus | None = None
 
     @property
     def status_kind(self) -> str:
         """Human-facing outcome; StoreState remains the persistence contract."""
+        if self.status is not None:
+            return self.status.value
         if self.cached:
-            return "cached"
+            return StoreSearchStatus.CACHED.value
         if self.state == StoreState.ACTIVE:
-            return "found" if self.offers else "empty"
-        detail = " ".join((*self.warnings, *self.errors)).casefold()
-        if "timed out" in detail or "timeout" in detail:
-            return "timeout"
-        if "no verified" in detail or "no live-search" in detail:
-            return "unsupported"
-        if any(marker in detail for marker in ("403", "429", "captcha", "access-check", "access-restricted")):
-            return "restricted"
-        return "error"
+            return StoreSearchStatus.FOUND.value if self.offers else StoreSearchStatus.EMPTY.value
+        # Old third-party adapters which have not supplied structured status
+        # are an error, rather than trying to guess from prose warnings.
+        return StoreSearchStatus.ERROR.value
 
     @property
     def detail(self) -> str:
@@ -106,7 +104,11 @@ def _search_store(adapter: object, query: StoreSearchQuery, enrichment_limit: in
         except Exception as error:  # A broken card must not discard a store.
             offers.append(offer)
             warnings.append(f"detail enrichment failed for {offer.source_product_id}: {type(error).__name__}")
-    return StoreSearchResult(result.source, tuple(_validated_identifiers(offers, query)), result.state, tuple(warnings), result.errors)
+    validated = tuple(_validated_identifiers(offers, query))
+    return StoreSearchResult(
+        result.source, validated, result.state, tuple(warnings), result.errors,
+        StoreSearchStatus.FOUND if validated else StoreSearchStatus.EMPTY,
+    )
 
 
 def _rank_live_offers(offers: tuple[RawOffer, ...], query: StoreSearchQuery) -> list[RawOffer]:
@@ -187,7 +189,7 @@ def live_search(
                 try:
                     result = future.result()
                     discovered.extend(result.offers)
-                    item = LiveStoreResult(source, result.state, len(result.offers), result.warnings, result.errors)
+                    item = LiveStoreResult(source, result.state, len(result.offers), result.warnings, result.errors, status=result.status)
                 except Exception as error:
                     item = LiveStoreResult(source, StoreState.DEGRADED, 0, errors=(f"live search failed: {type(error).__name__}",))
                 if item.state == StoreState.ACTIVE:
@@ -200,13 +202,13 @@ def live_search(
                 pending.remove(future)
                 source = futures[future]
                 future.cancel()
-                item = LiveStoreResult(source, StoreState.DEGRADED, 0, errors=(f"live search timed out after {per_store_timeout:g}s",))
+                item = LiveStoreResult(source, StoreState.DEGRADED, 0, errors=(f"live search timed out after {per_store_timeout:g}s",), status=StoreSearchStatus.TIMEOUT)
                 reports[source] = item
                 callback(item)
         for future in pending:
             source = futures[future]
             future.cancel()
-            item = LiveStoreResult(source, StoreState.DEGRADED, 0, errors=(f"global live-search timeout after {global_timeout:g}s",))
+            item = LiveStoreResult(source, StoreState.DEGRADED, 0, errors=(f"global live-search timeout after {global_timeout:g}s",), status=StoreSearchStatus.TIMEOUT)
             reports[source] = item
             callback(item)
     finally:
@@ -221,7 +223,7 @@ def live_search(
             cached = _cached_offers(repository, source, query)
             if cached:
                 discovered.extend(cached)
-                item = LiveStoreResult(source, item.state, len(cached), item.warnings, item.errors, cached=True)
+                item = LiveStoreResult(source, item.state, len(cached), item.warnings, item.errors, cached=True, status=StoreSearchStatus.CACHED)
                 reports[source] = item
                 callback(item)
     releases = _materialize(repository, discovered, query)

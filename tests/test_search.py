@@ -105,6 +105,6 @@ def test_release_uses_nonempty_semantically_equivalent_artist_and_title(tmp_path
 
 def test_discogs_url_prefers_barcode_then_catalog_and_label():
     by_barcode = Release(1, "Opeth", "Blackwater Park", barcode="4006381333931", catalog_number="MOVLP001", label="Music On Vinyl", release_year=2021)
-    assert discogs_search_url(by_barcode) == "https://www.discogs.com/search/?q=4006381333931&type=all"
+    assert discogs_search_url(by_barcode) == "https://www.discogs.com/search/?q=04006381333931&type=all"
     by_catalog = Release(2, "Opeth", "Damnation", label="Music On Vinyl", catalog_number="MOV LP 002", release_year=2003)
     assert discogs_search_url(by_catalog) == "https://www.discogs.com/search/?q=MOV+LP+002+Music+On+Vinyl&type=all"

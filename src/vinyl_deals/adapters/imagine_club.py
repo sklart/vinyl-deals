@@ -16,7 +16,7 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
-from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
+from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 
 
 class ImagineClubAdapter(BaseStoreAdapter):
@@ -62,16 +62,17 @@ class ImagineClubAdapter(BaseStoreAdapter):
     def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
         """Drupal Search API form from the public site header."""
         if query.is_empty():
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Empty live-search query.",), status=StoreSearchStatus.ERROR)
         url = f"{self.base_url}/search?{urlencode({'search_api_views_fulltext': query.text()})}"
         try:
             html = self._fetch(url)
             if any(marker in html.casefold() for marker in ("captcha", "access-check", "проверка безопасности")):
-                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Imagine Club returned a CAPTCHA/access-check page.",))
-            return StoreSearchResult(self.source, tuple(self.parse_listing(html)))
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Imagine Club returned a CAPTCHA/access-check page.",), status=StoreSearchStatus.RESTRICTED)
+            offers = tuple(self.parse_listing(html))
+            return StoreSearchResult(self.source, offers, status=StoreSearchStatus.FOUND if offers else StoreSearchStatus.EMPTY)
         except (HTTPError, URLError, OSError) as error:
             detail = f"HTTP {error.code}" if isinstance(error, HTTPError) else type(error).__name__
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Imagine Club public search unavailable ({detail}).",))
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"Imagine Club public search unavailable ({detail}).",), status=StoreSearchStatus.RESTRICTED if getattr(error, "code", None) in {403, 429} else StoreSearchStatus.ERROR)
 
     def enrich_offer(self, offer: RawOffer) -> RawOffer:
         return self.parse_product_page(self._fetch(offer.url), offer)

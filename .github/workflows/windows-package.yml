@@ -1,0 +1,33 @@
+name: windows-package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip pyinstaller
+      - run: python -m pip install .
+      - run: python tools/build_windows.py
+      - shell: pwsh
+        run: |
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "must-remain-empty"
+          $portable = Join-Path $env:RUNNER_TEMP "moved-VinylDeals"
+          Copy-Item .\dist\VinylDeals $portable -Recurse
+          & "$portable\vinyl-deals-gui.exe" --smoke-test
+          & "$portable\vinyl-deals.exe" doctor
+          if (!(Test-Path "$portable\data\vinyl_deals.sqlite3")) { throw "CLI did not create portable SQLite database" }
+          if (!(Test-Path "$portable\data\settings.ini")) { throw "GUI settings.ini was not created" }
+          if (Test-Path (Join-Path $env:LOCALAPPDATA "VinylDeals")) { throw "Portable build used LOCALAPPDATA" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VinylDeals-portable
+          path: dist/VinylDeals-portable.zip
