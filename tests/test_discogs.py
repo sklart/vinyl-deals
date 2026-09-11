@@ -147,4 +147,17 @@ def test_unauthorized_discogs_is_isolated(tmp_path):
         raise HTTPError("https://api.discogs.com", 401, "unauthorized", {}, None)
     service = DiscogsService(repository, DiscogsApiClient(token="invalid-token", fetch=unauthorized, max_retries=0))
     assert service.enrich_release(release.id) == []
+    assert service.last_error == "auth"
     assert search_releases(repository)[0].title == "Wish You Were Here"
+
+
+def test_matching_barcode_never_overrides_catalog_or_label_conflict(tmp_path):
+    repository, release = _repo(tmp_path)
+    wrong_catalog = _detail(catalog="OTHER")
+    wrong_label = _detail(release_id=2)
+    wrong_label["labels"] = [{"name": "Other Label", "catno": "SHVL 814"}]
+    compatible = _detail(release_id=3)
+    candidates = {item.release_id: item for item in _service(repository, [wrong_catalog, wrong_label, compatible], []).enrich_release(release.id)}
+    assert candidates[1].confidence == DiscogsConfidence.DIFFERENT
+    assert candidates[2].confidence == DiscogsConfidence.DIFFERENT
+    assert candidates[3].confidence == DiscogsConfidence.EXACT

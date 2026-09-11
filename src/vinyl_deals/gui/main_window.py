@@ -482,7 +482,10 @@ class MainWindow(QMainWindow):
         if not service.enabled:
             self.status_label.setText(f"Найдено релизов: {len(self.results)}. Discogs: настройте DISCOGS_TOKEN или discogs/token в data/settings.ini.")
             return
-        self._discogs_worker = TaskWorker(lambda: (generation, [service.enrich_release(release_id) for release_id in release_ids]))
+        def enrich() -> tuple[int, list[object], str | None]:
+            candidates = [service.enrich_release(release_id) for release_id in release_ids]
+            return generation, candidates, service.last_error
+        self._discogs_worker = TaskWorker(enrich)
         self._discogs_worker.completed.connect(self._discogs_completed)
         self._discogs_worker.finished.connect(self._discogs_finished)
         self._discogs_worker.start()
@@ -490,6 +493,9 @@ class MainWindow(QMainWindow):
     def _discogs_completed(self, result: object) -> None:
         generation = result[0] if isinstance(result, tuple) else -1
         if generation != self._search_generation:
+            return
+        if isinstance(result, tuple) and len(result) > 2 and result[2] == "auth":
+            self.status_label.setText("Discogs: неверный или недействительный token.")
             return
         criteria = self._criteria()
         if criteria is not None:

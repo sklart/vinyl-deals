@@ -169,3 +169,15 @@ def test_live_search_reports_store_progress_and_renders_partial_result(qapp, tmp
     assert wait_until(qapp, lambda: window.search_button.isEnabled())
     assert window.release_table.rowCount() == 1
     window.close()
+
+
+def test_stale_discogs_generation_cannot_replace_newer_results(qapp, tmp_path):
+    newest = release()
+    window = MainWindow(tmp_path / "generation.sqlite3", search_service=lambda *_args, **_kwargs: [newest])
+    window.results = [newest]
+    window._search_generation = 2
+    # Completion from search A is ignored after search B acquired generation 2.
+    window._discogs_completed((1, [], None))
+    assert window.results == [newest]
+    assert window._discogs_pending is None
+    window.close()

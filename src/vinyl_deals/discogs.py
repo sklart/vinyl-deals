@@ -140,14 +140,17 @@ def _classify(release: Release, metadata: dict[str, object]) -> tuple[DiscogsCon
     tag_pairs = (("mono", "stereo"), ("colored", "black"), ("colour", "black"), ("picture_disc", "normal"), ("box_set", "single"))
     if any(left in local_tags and right in remote_tags or right in local_tags and left in remote_tags for left, right in tag_pairs):
         return DiscogsConfidence.DIFFERENT, "edition_conflict"
+    local_catalog, remote_catalog = catalog_number(release.catalog_number), catalog_number(str(metadata.get("catalog_number") or ""))
+    local_label, remote_label = text(release.label), text(str(metadata.get("label") or ""))
+    if local_catalog and remote_catalog and local_catalog != remote_catalog:
+        return DiscogsConfidence.DIFFERENT, "catalog_conflict"
+    if local_label and remote_label and local_label != remote_label:
+        return DiscogsConfidence.DIFFERENT, "label_conflict"
     local_barcode, remote_barcode = digits(release.barcode), digits(str(metadata.get("barcode") or ""))
     if local_barcode and remote_barcode:
         return (DiscogsConfidence.EXACT, "barcode") if local_barcode == remote_barcode else (DiscogsConfidence.DIFFERENT, "barcode_conflict")
-    local_catalog, remote_catalog = catalog_number(release.catalog_number), catalog_number(str(metadata.get("catalog_number") or ""))
-    labels_match = bool(text(release.label) and text(release.label) == text(str(metadata.get("label") or "")))
+    labels_match = bool(local_label and local_label == remote_label)
     if local_catalog and remote_catalog:
-        if local_catalog != remote_catalog:
-            return DiscogsConfidence.DIFFERENT, "catalog_conflict"
         artist_title_confirmed = bool(remote_artist and remote_title)
         return (DiscogsConfidence.HIGH if labels_match and artist_title_confirmed else DiscogsConfidence.POSSIBLE, "catalog_and_label" if labels_match and artist_title_confirmed else "catalog")
     artist_title = bool(remote_artist and remote_title)
@@ -158,6 +161,7 @@ def _classify(release: Release, metadata: dict[str, object]) -> tuple[DiscogsCon
 class DiscogsService:
     def __init__(self, repository: SQLiteRepository, client: DiscogsApiClient) -> None:
         self.repository, self.client = repository, client
+        self.last_error: str | None = None
 
     @property
     def enabled(self) -> bool:
@@ -186,6 +190,7 @@ class DiscogsService:
         return queries
 
     def enrich_release(self, release_id: int) -> list[DiscogsCandidate]:
+        self.last_error = None
         if not self.enabled:
             return []
         release = self.repository.release_by_id(release_id)
@@ -204,7 +209,8 @@ class DiscogsService:
                         continue
                     try:
                         detail = self._get(f"/releases/{int(item['id'])}")
-                    except (HTTPError, URLError, TimeoutError, ValueError, PermissionError):
+                    except (HTTPError, URLError, TimeoutError, ValueError, PermissionError) as exc:
+                        self._record_error(exc)
                         continue
                     meta = _metadata(detail)
                     confidence, kind = _classify(release, meta)
@@ -212,7 +218,8 @@ class DiscogsService:
                     previous = candidates.get(candidate.release_id)
                     if previous is None or list(DiscogsConfidence).index(candidate.confidence) < list(DiscogsConfidence).index(previous.confidence):
                         candidates[candidate.release_id] = candidate
-            except (HTTPError, URLError, TimeoutError, ValueError, PermissionError):
+            except (HTTPError, URLError, TimeoutError, ValueError, PermissionError) as exc:
+                self._record_error(exc)
                 continue
         strong = [candidate for candidate in candidates.values() if candidate.confidence in {DiscogsConfidence.EXACT, DiscogsConfidence.HIGH}]
         if len(strong) > 1:
@@ -223,3 +230,9 @@ class DiscogsService:
             if status == "confirmed":
                 self.repository.fill_missing_release_metadata(release_id, candidate.metadata)
         return list(candidates.values())
+
+    def _record_error(self, error: BaseException) -> None:
+        if isinstance(error, HTTPError) and error.code in {401, 403}:
+            self.last_error = "auth"
+        elif self.last_error is None:
+            self.last_error = "unavailable"
