@@ -103,6 +103,14 @@ def test_scheduler_cycle_keeps_gui_controls_disabled_until_finished(qapp, tmp_pa
             break
         QTest.qWait(10)
     assert started.is_set()
+    # ``progress`` crosses threads, so wait for the queued Qt signal rather
+    # than assuming it is delivered in the same event-loop turn as `started`.
+    for _ in range(50):
+        qapp.processEvents()
+        if "Проверка 1/1: Opeth — Blackwater Park" in window.status_label.text():
+            break
+        QTest.qWait(10)
+    assert "Проверка 1/1: Opeth — Blackwater Park" in window.status_label.text()
     assert not window.search_button.isEnabled()
     assert not window.watch_add_button.isEnabled()
     assert not window.scheduler_run_button.isEnabled()
