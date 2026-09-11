@@ -49,6 +49,9 @@ class ReleaseSearchResult:
     best_effective_offer: OfferSearchResult | None = None
     discogs_confidence: str | None = None
     discogs_release_id: int | None = None
+    offer_count: int = 0
+    store_count: int = 0
+    has_possible_matches: bool = False
 
     @property
     def best_offer(self) -> OfferSearchResult | None:
@@ -147,11 +150,13 @@ def search_releases(repository: SQLiteRepository, *, artist: str | None = None, 
             continue
         offers = search_offers(repository, release.id, now=now, freshness_days=freshness_days)
         confirmed = repository.confirmed_discogs_match(release.id)
+        possible_offer_ids = {offer_id for pair in repository.possible_matches() for offer_id in pair[:2]}
         results.append(ReleaseSearchResult(
             release.id, release.artist, release.title, release.label, release.catalog_number, release.barcode,
             release.release_year, release.format, offers, find_best_new_offer(offers), find_best_used_offer(offers),
             find_lowest_price_offer(offers), str(confirmed["discogs_url"]) if confirmed else discogs_search_url(release),
             find_best_effective_offer(offers), str(confirmed["confidence"]) if confirmed else None,
             int(confirmed["discogs_release_id"]) if confirmed else None,
+            len(offers), len({offer.store for offer in offers}), any(offer.offer_id in possible_offer_ids for offer in offers),
         ))
     return results

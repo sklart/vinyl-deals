@@ -110,7 +110,7 @@ class MainWindow(QMainWindow):
         buttons.addStretch()
         layout.addLayout(buttons)
         splitter = QSplitter(Qt.Orientation.Vertical)
-        self.release_table = self._table(("Исполнитель", "Альбом", "Label", "Catalog", "Год", "Формат", "Barcode", "Discogs"), "release_table")
+        self.release_table = self._table(("Исполнитель", "Альбом", "Label", "Catalog", "Год", "Формат", "Barcode", "Предложений", "Магазинов", "Discogs"), "release_table")
         self.offer_table = self._table(("Магазин", "Цена", "Итоговая цена", "Самовывоз", "Состояние", "Наличие", "Deal %", "Класс"), "offer_table")
         splitter.addWidget(self.release_table)
         splitter.addWidget(self.offer_table)
@@ -258,7 +258,7 @@ class MainWindow(QMainWindow):
         self.release_table.setRowCount(0)
         if self.results:
             result = self.results[0]; self.release_table.insertRow(0)
-            for column, value in enumerate((result.artist, result.title, result.label or "", result.catalog_number or "", str(result.release_year or ""), result.format or "", result.barcode or "", result.discogs_confidence or "поиск")):
+            for column, value in enumerate((result.artist, result.title, result.label or "", result.catalog_number or "", str(result.release_year or ""), result.format or "", result.barcode or "", str(result.offer_count), str(result.store_count), result.discogs_confidence or "поиск")):
                 item = QTableWidgetItem(value); item.setData(Qt.ItemDataRole.UserRole, result.release_id if column == 0 else None); self.release_table.setItem(0, column, item)
             self.tabs.setCurrentWidget(self.search_page); self.release_table.selectRow(0)
 
@@ -405,7 +405,10 @@ class MainWindow(QMainWindow):
         for result in self.results:
             row = self.release_table.rowCount()
             self.release_table.insertRow(row)
-            values = (result.artist, result.title, result.label or "", result.catalog_number or "", str(result.release_year or ""), result.format or "", result.barcode or "", result.discogs_confidence or "поиск")
+            discogs = result.discogs_confidence or "поиск"
+            if result.has_possible_matches:
+                discogs += " · possible"
+            values = (result.artist, result.title, result.label or "", result.catalog_number or "", str(result.release_year or ""), result.format or "", result.barcode or "", str(result.offer_count), str(result.store_count), discogs)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if column == 0:

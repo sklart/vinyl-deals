@@ -229,6 +229,10 @@ class DiscogsService:
             self.repository.save_discogs_match(release_id, discogs_release_id=candidate.release_id, discogs_master_id=candidate.master_id, discogs_url=candidate.url, confidence=candidate.confidence.value, match_kind=candidate.match_kind, status=status, metadata=candidate.metadata)
             if status == "confirmed":
                 self.repository.fill_missing_release_metadata(release_id, candidate.metadata)
+        # Two provisional groups can become one only after the same concrete
+        # Discogs pressing has been confirmed.  The repository rechecks all
+        # store-card conflicts before it merges them.
+        self.repository.consolidate_confirmed_discogs_releases()
         return list(candidates.values())
 
     def _record_error(self, error: BaseException) -> None:

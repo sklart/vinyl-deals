@@ -44,6 +44,12 @@ def match_offers(left: RawOffer, right: RawOffer) -> MatchResult:
     artist = compare(left.artist_raw, right.artist_raw)
     title = compare(left.title_raw, right.title_raw)
     left_barcode, right_barcode = normalize.normalize_barcode(left.barcode), normalize.normalize_barcode(right.barcode)
+    left_catalog, right_catalog = normalize.catalog_number(left.catalog_number_raw), normalize.catalog_number(right.catalog_number_raw)
+    left_label, right_label = normalize.text(left.label), normalize.text(right.label)
+    if left_catalog and right_catalog and left_catalog != right_catalog:
+        blocking.append("catalog_number differs")
+    if left_label and right_label and left_label != right_label:
+        blocking.append("label differs")
     if left_barcode and right_barcode:
         (matches if left_barcode == right_barcode else blocking).append("barcode matches" if left_barcode == right_barcode else "barcode differs")
     elif left.barcode or right.barcode:
@@ -62,7 +68,7 @@ def match_offers(left: RawOffer, right: RawOffer) -> MatchResult:
     for attr in ("country", "release_year"):
         state = compare(getattr(left, attr), getattr(right, attr))
         if state == Comparison.MATCH: matches.append(f"{attr} matches")
-        elif state == Comparison.CONFLICT: soft.append(f"{attr} differs")
+        elif state == Comparison.CONFLICT: blocking.append(f"{attr} differs")
         else: unknown.append(attr)
     if blocking:
         # A checked GTIN identifies a concrete commercial pressing more
@@ -82,9 +88,8 @@ def match_offers(left: RawOffer, right: RawOffer) -> MatchResult:
     same_artist_title = artist == title == Comparison.MATCH
     if left_barcode and left_barcode == right_barcode and same_artist_title:
         return MatchResult(MatchKind.EXACT_BARCODE, 0.99, tuple(matches), (), tuple(soft), tuple(unknown))
-    left_catalog, right_catalog = normalize.catalog_number(left.catalog_number_raw), normalize.catalog_number(right.catalog_number_raw)
-    same_label = normalize.text(left.label) and normalize.text(left.label) == normalize.text(right.label)
-    if left_catalog and left_catalog == right_catalog and same_label and same_artist_title and "release_year differs" not in soft:
+    same_label = left_label and left_label == right_label
+    if left_catalog and left_catalog == right_catalog and same_label and same_artist_title:
         return MatchResult(MatchKind.CATALOG_AND_LABEL, 0.95, tuple(matches), (), tuple(soft), tuple(unknown))
     if artist == Comparison.CONFLICT or title == Comparison.CONFLICT:
         return MatchResult(MatchKind.DIFFERENT, 0.0, tuple(matches), ("artist/title are not both confirmed",), tuple(soft), tuple(unknown))

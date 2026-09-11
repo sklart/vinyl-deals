@@ -154,7 +154,7 @@ def test_live_search_uses_multiple_verified_production_adapters_without_catalogu
     def vinyl_factory():
         adapter = VinylRuAdapter()
         adapter._fetch_text = lambda url: vinyl_json if "smartSearch" in url else vinyl_page
-        adapter.enrich_offer = lambda item: replace(item, artist_raw="Dire Straits", title_raw="Communique", barcode="4006381333931", catalog_number_raw="VERTIGO-6360", condition_media="NEW", condition_sleeve="NEW", raw_data={"fully_enriched": True})
+        adapter.enrich_offer = lambda item: replace(item, artist_raw="Dire Straits", title_raw="Communique", barcode="4006381333931", catalog_number_raw="VERTIGO-6360", label="Vertigo", release_year=1979, country="UK", format="LP", disc_count=1, vinyl_size='12"', rpm=None, vinyl_color=None, edition_tags=(), condition_media="NEW", condition_sleeve="NEW", raw_data={"fully_enriched": True})
         adapter.get_catalog = lambda: (_ for _ in ()).throw(AssertionError("catalogue must not run"))
         return adapter
 
@@ -167,6 +167,11 @@ def test_live_search_uses_multiple_verified_production_adapters_without_catalogu
                 title_raw="Communique" if item.source_product_id == "8618" else item.title_raw,
                 barcode="4006381333931" if item.source_product_id == "8618" else "3770024955316",
                 catalog_number_raw="VERTIGO-6360" if item.source_product_id == "8618" else "VERTIGO-6361",
+                label="Vertigo",
+                release_year=1979 if item.source_product_id == "8618" else 1985,
+                country="UK", format="LP" if item.source_product_id == "8618" else "2LP",
+                disc_count=1 if item.source_product_id == "8618" else 2,
+                vinyl_size='12"', rpm=None, vinyl_color=None, edition_tags=(),
                 condition_media="NEW",
                 condition_sleeve="NEW",
             raw_data={"fully_enriched": True},
@@ -187,7 +192,7 @@ def test_live_search_uses_multiple_verified_production_adapters_without_catalogu
             artist_raw="Dire Straits",
             title_raw="Communique",
             barcode="4006381333931",
-            catalog_number_raw="VERTIGO-6360",
+                catalog_number_raw="VERTIGO-6360", label="Vertigo", release_year=1979, country="UK", format="LP", disc_count=1, vinyl_size='12"', rpm=None, vinyl_color=None, edition_tags=(),
             condition_media="NEW",
             condition_sleeve="NEW",
             raw_data={"fully_enriched": True},
@@ -210,7 +215,7 @@ def test_live_search_uses_multiple_verified_production_adapters_without_catalogu
             artist_raw="Dire Straits",
             title_raw="Communique",
             barcode="4006381333931",
-            catalog_number_raw="VERTIGO-6360",
+                catalog_number_raw="VERTIGO-6360", label="Vertigo", release_year=1979, country="UK", format="LP", disc_count=1, vinyl_size='12"', rpm=None, vinyl_color=None, edition_tags=(),
             condition_media="NEW",
             condition_sleeve="NEW",
             raw_data={"fully_enriched": True},
@@ -244,6 +249,7 @@ def test_live_search_uses_multiple_verified_production_adapters_without_catalogu
     deal = evaluate_offer(repository, target.offer_id)
     assert deal is not None
     comparison_prices = [offer.price for offer in pressing.offers if offer.store != target.store and offer.price is not None]
+    # The benchmark deliberately excludes all cards from the target store.
     assert deal.comparable_count == 3
     assert deal.market_median == median_price(comparison_prices)
     assert deal.discount_pct == (deal.market_median - target.price) / deal.market_median * 100

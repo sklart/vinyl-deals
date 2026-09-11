@@ -83,7 +83,7 @@ def test_contradictory_manual_decisions_are_rejected(tmp_path):
 def test_catalog_and_label_with_different_year_is_not_auto_match():
     left = RawOffer.now(source="a", source_product_id="1", url="x", artist_raw="Artist", title_raw="Album", label="Label", catalog_number_raw="CAT-1", release_year=2016)
     right = RawOffer.now(source="b", source_product_id="2", url="x", artist_raw="Artist", title_raw="Album", label="Label", catalog_number_raw="CAT-1", release_year=2023)
-    assert match_offers(left, right).kind == MatchKind.POSSIBLE
+    assert match_offers(left, right).kind == MatchKind.DIFFERENT
 
 
 def test_foreign_keys_are_enabled_and_cleanup_removes_empty_releases(tmp_path):

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json
 import sqlite3
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from decimal import Decimal
@@ -38,6 +38,20 @@ def _serialize_offer(offer: RawOffer) -> str:
     payload["unconditional_discount"] = str(offer.unconditional_discount) if offer.unconditional_discount is not None else None
     payload["availability"] = offer.availability.value
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _clean_offer_metadata(offer: RawOffer) -> RawOffer:
+    """Keep store presentation text out of pressing-identification fields."""
+    label = offer.label.strip() if offer.label else None
+    catalog = offer.catalog_number_raw.strip() if offer.catalog_number_raw else None
+    fmt = offer.format.strip() if offer.format else None
+    if label and (len(label) > 120 or any(marker in label.casefold() for marker in ("страна:", "описание", "характеристик"))):
+        label = None
+    if catalog and offer.store_sku and catalog.casefold() == offer.store_sku.strip().casefold():
+        catalog = None
+    if fmt and len(fmt) > 80:
+        fmt = None
+    return replace(offer, label=label, catalog_number_raw=catalog, format=fmt)
 
 def _deserialize_offer(payload: str) -> RawOffer:
     data = json.loads(payload)
@@ -118,6 +132,7 @@ class SQLiteRepository:
                     diagnostics.append(f"release_match {match_id} points to Release {release_id} but its offers do not both belong there")
         return diagnostics
     def upsert_offer(self, offer: RawOffer) -> None:
+        offer = _clean_offer_metadata(offer)
         self.initialize(); occurred = offer.fetched_at.isoformat()
         with self._connect() as connection:
             connection.execute("INSERT INTO raw_products(source, source_product_id, fetched_at, payload_json) VALUES (?, ?, ?, ?) ON CONFLICT(source, source_product_id) DO UPDATE SET fetched_at=excluded.fetched_at, payload_json=excluded.payload_json", (offer.source, offer.source_product_id, occurred, json.dumps(offer.raw_data, ensure_ascii=False)))
@@ -425,6 +440,27 @@ class SQLiteRepository:
         completed = False
         try:
             self._validate_release_merge(connection, canonical_id, redundant_id)
+            # Preserve Discogs evidence while consolidating provisional groups.
+            # Identical candidates are duplicate evidence, so remove only the
+            # redundant copy before moving the rest under the canonical Release.
+            duplicate_discogs = connection.execute(
+                "SELECT discogs_release_id FROM discogs_release_matches WHERE release_id=? "
+                "AND discogs_release_id IN (SELECT discogs_release_id FROM discogs_release_matches WHERE release_id=?)",
+                (redundant_id, canonical_id),
+            ).fetchall()
+            if duplicate_discogs:
+                connection.executemany(
+                    "DELETE FROM discogs_release_matches WHERE release_id=? AND discogs_release_id=?",
+                    [(redundant_id, row[0]) for row in duplicate_discogs],
+                )
+            connection.execute("UPDATE discogs_release_matches SET release_id=? WHERE release_id=?", (canonical_id, redundant_id))
+            canonical_watch = connection.execute("SELECT 1 FROM watchlist WHERE release_id=?", (canonical_id,)).fetchone()
+            redundant_watch = connection.execute("SELECT 1 FROM watchlist WHERE release_id=?", (redundant_id,)).fetchone()
+            if canonical_watch and redundant_watch:
+                raise ReleaseMergeConflict("Cannot merge releases: both are present in watchlist.")
+            if redundant_watch:
+                connection.execute("UPDATE watchlist SET release_id=? WHERE release_id=?", (canonical_id, redundant_id))
+            connection.execute("UPDATE alerts SET release_id=? WHERE release_id=?", (canonical_id, redundant_id))
             connection.execute("UPDATE offers SET release_id=? WHERE release_id=?", (canonical_id, redundant_id))
             connection.execute("UPDATE release_matches SET release_id=? WHERE release_id=?", (canonical_id, redundant_id))
             connection.execute("DELETE FROM releases WHERE id=?", (redundant_id,))
@@ -435,6 +471,29 @@ class SQLiteRepository:
             if owns_connection:
                 (connection.commit if completed else connection.rollback)()
                 connection.close()
+
+    def consolidate_confirmed_discogs_releases(self) -> int:
+        """Merge compatible local groups confirmed as the same pressing."""
+        self.initialize()
+        merged = 0
+        with self._connect() as connection:
+            groups = connection.execute(
+                "SELECT discogs_release_id FROM discogs_release_matches WHERE status='confirmed' "
+                "GROUP BY discogs_release_id HAVING COUNT(DISTINCT release_id) > 1"
+            ).fetchall()
+            for (discogs_release_id,) in groups:
+                release_ids = [row[0] for row in connection.execute(
+                    "SELECT release_id FROM discogs_release_matches WHERE status='confirmed' "
+                    "AND discogs_release_id=? ORDER BY release_id", (discogs_release_id,)
+                )]
+                canonical = release_ids[0]
+                for redundant in release_ids[1:]:
+                    try:
+                        canonical = self.merge_releases(canonical, redundant, connection)
+                        merged += 1
+                    except ReleaseMergeConflict:
+                        continue
+        return merged
 
     def _manual_same_component(self, connection: sqlite3.Connection, offer_id: int) -> set[int]:
         component, frontier = {offer_id}, [offer_id]

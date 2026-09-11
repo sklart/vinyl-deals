@@ -9,8 +9,10 @@ from typing import Callable
 
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.domain import RawOffer, StoreSearchQuery, StoreSearchResult, StoreState
+from vinyl_deals.matching import MatchKind, match_offers
 from vinyl_deals.matching.normalize import catalog_number, normalize_barcode, text
 from vinyl_deals.matching.service import build_match_queue
+from vinyl_deals.database.repository import ReleaseMergeConflict
 from vinyl_deals.search import ReleaseSearchResult, search_releases
 from vinyl_deals.updates import DEFAULT_ADAPTER_FACTORIES, STORE_LABELS
 
@@ -37,6 +39,37 @@ class LiveSearchResult:
 ProgressCallback = Callable[[LiveStoreResult], None]
 
 
+def _consolidate_compatible_live_offers(
+    repository: SQLiteRepository, offer_ids: list[int]
+) -> None:
+    """Join incomplete live cards only when their identity has no conflict.
+
+    The normal matcher keeps artist/title-only pairs as ``POSSIBLE`` so a
+    catalogue crawl never silently joins editions with sparse shop metadata.
+    In one targeted live search, however, two cards with the *same normalized*
+    artist and title and no known physical/edition conflict are the useful
+    provisional representation of one pressing.  Detail enrichment or Discogs
+    can still later split a cluster when a real conflicting identifier arrives.
+    """
+    wanted = set(offer_ids)
+    candidates = [item for item in repository.offers_for_matching() if item[0] in wanted]
+    for index, (left_id, left) in enumerate(candidates):
+        for right_id, right in candidates[index + 1 :]:
+            if left.source == right.source:
+                continue
+            if text(left.artist_raw) != text(right.artist_raw) or text(left.title_raw) != text(right.title_raw):
+                continue
+            result = match_offers(left, right)
+            if result.kind != MatchKind.POSSIBLE or result.blocking_conflicts:
+                continue
+            try:
+                repository.create_release_for_pair(left_id, right_id, left, right)
+            except ReleaseMergeConflict:
+                # A cluster may already contain an independently discovered
+                # incompatible pressing.  Keep that ambiguity separate.
+                continue
+
+
 def _materialize(repository: SQLiteRepository, discovered: list[RawOffer], query: StoreSearchQuery) -> tuple[ReleaseSearchResult, ...]:
     """Persist a completed batch and expose its grouping immediately."""
     unique = {(offer.source, offer.source_product_id): offer for offer in discovered}
@@ -45,6 +78,7 @@ def _materialize(repository: SQLiteRepository, discovered: list[RawOffer], query
     build_match_queue(repository)
     searched_ids = [offer_id for offer_id, offer in repository.offers_for_matching() if (offer.source, offer.source_product_id) in unique]
     repository.ensure_releases_for_unmatched_offers(searched_ids)
+    _consolidate_compatible_live_offers(repository, searched_ids)
     releases = search_releases(repository, artist=query.artist, title=query.title, barcode=query.barcode, catalog=query.catalog_number, now=datetime.now(timezone.utc))
     return tuple(sorted(releases, key=lambda release: (release.artist.casefold(), release.title.casefold(), release.release_id)))
 
