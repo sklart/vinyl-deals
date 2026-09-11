@@ -217,6 +217,74 @@ class SQLiteRepository:
             row = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format FROM releases WHERE id=?", (release_id,)).fetchone()
         return Release(*row) if row else None
 
+    def discogs_matches(self, release_id: int) -> list[dict[str, object]]:
+        """Return Discogs candidates; a confirmed row is authoritative locally."""
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT discogs_release_id,discogs_master_id,discogs_url,confidence,match_kind,status,matched_at,metadata_json "
+                "FROM discogs_release_matches WHERE release_id=? "
+                "ORDER BY CASE status WHEN 'confirmed' THEN 0 WHEN 'possible' THEN 1 ELSE 2 END, id",
+                (release_id,),
+            ).fetchall()
+        keys = ("discogs_release_id", "discogs_master_id", "discogs_url", "confidence", "match_kind", "status", "matched_at", "metadata_json")
+        return [{**dict(zip(keys, row, strict=True)), "metadata": json.loads(row[-1])} for row in rows]
+
+    def confirmed_discogs_match(self, release_id: int) -> dict[str, object] | None:
+        return next((row for row in self.discogs_matches(release_id) if row["status"] == "confirmed"), None)
+
+    def save_discogs_match(self, release_id: int, *, discogs_release_id: int, discogs_master_id: int | None,
+                           discogs_url: str, confidence: str, match_kind: str, status: str,
+                           metadata: dict[str, object]) -> None:
+        self.initialize()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO discogs_release_matches(release_id,discogs_release_id,discogs_master_id,discogs_url,confidence,match_kind,status,matched_at,metadata_json) "
+                "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(release_id,discogs_release_id) DO UPDATE SET "
+                "discogs_master_id=excluded.discogs_master_id,discogs_url=excluded.discogs_url,confidence=excluded.confidence,match_kind=excluded.match_kind,status=excluded.status,matched_at=excluded.matched_at,metadata_json=excluded.metadata_json",
+                (release_id, discogs_release_id, discogs_master_id, discogs_url, confidence, match_kind, status, _utc_now(), json.dumps(metadata, ensure_ascii=False)),
+            )
+
+    def confirm_discogs_match(self, release_id: int, discogs_release_id: int) -> None:
+        """A user confirmation selects one saved candidate without touching store matching."""
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute("SELECT metadata_json FROM discogs_release_matches WHERE release_id=? AND discogs_release_id=?", (release_id, discogs_release_id)).fetchone()
+            if not row:
+                raise ValueError("Discogs candidate does not exist")
+            connection.execute("UPDATE discogs_release_matches SET status='possible' WHERE release_id=? AND status='confirmed'", (release_id,))
+            connection.execute("UPDATE discogs_release_matches SET status='confirmed', matched_at=? WHERE release_id=? AND discogs_release_id=?", (_utc_now(), release_id, discogs_release_id))
+            metadata = json.loads(row[0])
+            allowed = {"barcode", "label", "catalog_number", "release_year", "format", "country", "disc_count", "vinyl_color"}
+            values = {key: value for key, value in metadata.items() if key in allowed and value not in (None, "", [])}
+            if values:
+                assignments = ", ".join(f"{key}=COALESCE({key}, ?)" for key in values)
+                connection.execute(f"UPDATE releases SET {assignments}, updated_at=? WHERE id=?", (*values.values(), _utc_now(), release_id))
+
+    def fill_missing_release_metadata(self, release_id: int, metadata: dict[str, object]) -> None:
+        """Discogs may fill blanks, never overwrite a differing store-derived value."""
+        allowed = {"barcode", "label", "catalog_number", "release_year", "format", "country", "disc_count", "vinyl_color"}
+        values = {key: value for key, value in metadata.items() if key in allowed and value not in (None, "", [])}
+        if not values:
+            return
+        self.initialize()
+        with self._connect() as connection:
+            assignments = ", ".join(f"{key}=COALESCE({key}, ?)" for key in values)
+            connection.execute(f"UPDATE releases SET {assignments}, updated_at=? WHERE id=?", (*values.values(), _utc_now(), release_id))
+
+    def discogs_cache_get(self, cache_key: str) -> dict[str, object] | None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute("SELECT payload_json,expires_at FROM discogs_api_cache WHERE cache_key=?", (cache_key,)).fetchone()
+        if not row or row[1] <= _utc_now():
+            return None
+        return json.loads(row[0])
+
+    def discogs_cache_put(self, cache_key: str, payload: dict[str, object], *, ttl_days: int = 30) -> None:
+        self.initialize(); now = datetime.now(timezone.utc)
+        with self._connect() as connection:
+            connection.execute("INSERT INTO discogs_api_cache(cache_key,payload_json,fetched_at,expires_at) VALUES (?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json,fetched_at=excluded.fetched_at,expires_at=excluded.expires_at", (cache_key, json.dumps(payload, ensure_ascii=False), now.isoformat(), (now + timedelta(days=ttl_days)).isoformat()))
+
     def add_watchlist(self, release_id: int, *, max_price: Decimal | None = None, min_deal_class: str | None = None, local_only: bool = False, city: str | None = None, pickup_only: bool = False) -> None:
         if self.release_by_id(release_id) is None:
             raise ValueError(f"Release {release_id} does not exist")

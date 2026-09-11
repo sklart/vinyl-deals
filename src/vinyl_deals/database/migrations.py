@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-CURRENT_VERSION = 4
+CURRENT_VERSION = 5
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS raw_products (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_product_id TEXT NOT NULL, fetched_at TEXT NOT NULL, payload_json TEXT NOT NULL, UNIQUE(source, source_product_id));
@@ -137,6 +137,32 @@ def migrate_v4(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE INDEX IF NOT EXISTS ix_alerts_delivery_claim ON alerts(sent_at, delivery_claimed_at, id)")
 
 
+def migrate_v5(connection: sqlite3.Connection) -> None:
+    """Keep Discogs evidence separate from store-to-store release matching."""
+    connection.executescript("""
+    CREATE TABLE IF NOT EXISTS discogs_release_matches (
+        id INTEGER PRIMARY KEY,
+        release_id INTEGER NOT NULL REFERENCES releases(id) ON DELETE CASCADE,
+        discogs_release_id INTEGER NOT NULL,
+        discogs_master_id INTEGER,
+        discogs_url TEXT NOT NULL,
+        confidence TEXT NOT NULL,
+        match_kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        matched_at TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        UNIQUE(release_id, discogs_release_id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_discogs_matches_release ON discogs_release_matches(release_id, status);
+    CREATE TABLE IF NOT EXISTS discogs_api_cache (
+        cache_key TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        fetched_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    );
+    """)
+
+
 def migrate(connection: sqlite3.Connection) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version > CURRENT_VERSION:
@@ -156,3 +182,7 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 4:
         migrate_v4(connection)
         connection.execute("PRAGMA user_version = 4")
+        version = 4
+    if version < 5:
+        migrate_v5(connection)
+        connection.execute("PRAGMA user_version = 5")

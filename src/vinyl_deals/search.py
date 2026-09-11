@@ -47,6 +47,8 @@ class ReleaseSearchResult:
     lowest_price_offer: OfferSearchResult | None
     discogs_url: str | None
     best_effective_offer: OfferSearchResult | None = None
+    discogs_confidence: str | None = None
+    discogs_release_id: int | None = None
 
     @property
     def best_offer(self) -> OfferSearchResult | None:
@@ -139,8 +141,17 @@ def find_best_effective_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSea
 
 def search_releases(repository: SQLiteRepository, *, artist: str | None = None, title: str | None = None, barcode: str | None = None, catalog: str | None = None, label: str | None = None, year: int | None = None, format: str | None = None, now: datetime | None = None, freshness_days: int = DEFAULT_FRESHNESS_DAYS) -> list[ReleaseSearchResult]:
     """Find Releases using normalized AND semantics for every supplied field."""
-    return [
-        ReleaseSearchResult(release.id, release.artist, release.title, release.label, release.catalog_number, release.barcode, release.release_year, release.format, offers := search_offers(repository, release.id, now=now, freshness_days=freshness_days), find_best_new_offer(offers), find_best_used_offer(offers), find_lowest_price_offer(offers), discogs_search_url(release), find_best_effective_offer(offers))
-        for release in repository.releases_for_search()
-        if _matches(release, artist=artist, title=title, barcode=barcode, catalog=catalog, label=label, year=year, format=format)
-    ]
+    results: list[ReleaseSearchResult] = []
+    for release in repository.releases_for_search():
+        if not _matches(release, artist=artist, title=title, barcode=barcode, catalog=catalog, label=label, year=year, format=format):
+            continue
+        offers = search_offers(repository, release.id, now=now, freshness_days=freshness_days)
+        confirmed = repository.confirmed_discogs_match(release.id)
+        results.append(ReleaseSearchResult(
+            release.id, release.artist, release.title, release.label, release.catalog_number, release.barcode,
+            release.release_year, release.format, offers, find_best_new_offer(offers), find_best_used_offer(offers),
+            find_lowest_price_offer(offers), str(confirmed["discogs_url"]) if confirmed else discogs_search_url(release),
+            find_best_effective_offer(offers), str(confirmed["confidence"]) if confirmed else None,
+            int(confirmed["discogs_release_id"]) if confirmed else None,
+        ))
+    return results

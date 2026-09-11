@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from vinyl_deals.database.repository import SQLiteRepository
+from vinyl_deals.discogs import DiscogsApiClient, DiscogsService
 from vinyl_deals.build_metadata import metadata as build_metadata
 from vinyl_deals.domain import StoreSearchQuery
 from vinyl_deals.live_search import live_search
@@ -45,7 +46,7 @@ from .workers import LiveSearchWorker, TaskWorker, UpdateWorker
 class MainWindow(QMainWindow):
     """Native Qt shell that delegates search and updates to application services."""
 
-    def __init__(self, database: Path | str | None = None, *, search_service: Callable = search_releases, live_search_service: Callable = live_search, update_service: Callable = refresh_catalogs, url_opener: Callable[[QUrl], bool] = QDesktopServices.openUrl, scheduler_factory: Callable = Scheduler) -> None:
+    def __init__(self, database: Path | str | None = None, *, search_service: Callable = search_releases, live_search_service: Callable = live_search, update_service: Callable = refresh_catalogs, url_opener: Callable[[QUrl], bool] = QDesktopServices.openUrl, scheduler_factory: Callable = Scheduler, discogs_service_factory: Callable[[SQLiteRepository], DiscogsService] | None = None) -> None:
         super().__init__()
         database_path = Path(database) if database is not None else application_database_path()
         self.repository = SQLiteRepository(database_path)
@@ -60,6 +61,8 @@ class MainWindow(QMainWindow):
         self._live_worker: LiveSearchWorker | None = None
         self._live_store_status: dict[str, str] = {}
         self._alert_worker: TaskWorker | None = None
+        self._discogs_worker: TaskWorker | None = None
+        self.discogs_service_factory = discogs_service_factory or (lambda repository: DiscogsService(repository, DiscogsApiClient()))
         self._search_performed = False
         self._updating = False
         self._closing = False
@@ -102,7 +105,7 @@ class MainWindow(QMainWindow):
         buttons.addStretch()
         layout.addLayout(buttons)
         splitter = QSplitter(Qt.Orientation.Vertical)
-        self.release_table = self._table(("Исполнитель", "Альбом", "Label", "Catalog", "Год", "Формат", "Barcode"), "release_table")
+        self.release_table = self._table(("Исполнитель", "Альбом", "Label", "Catalog", "Год", "Формат", "Barcode", "Discogs"), "release_table")
         self.offer_table = self._table(("Магазин", "Цена", "Итоговая цена", "Самовывоз", "Состояние", "Наличие", "Deal %", "Класс"), "offer_table")
         splitter.addWidget(self.release_table)
         splitter.addWidget(self.offer_table)
@@ -246,7 +249,7 @@ class MainWindow(QMainWindow):
         self.release_table.setRowCount(0)
         if self.results:
             result = self.results[0]; self.release_table.insertRow(0)
-            for column, value in enumerate((result.artist, result.title, result.label or "", result.catalog_number or "", str(result.release_year or ""), result.format or "", result.barcode or "")):
+            for column, value in enumerate((result.artist, result.title, result.label or "", result.catalog_number or "", str(result.release_year or ""), result.format or "", result.barcode or "", result.discogs_confidence or "поиск")):
                 item = QTableWidgetItem(value); item.setData(Qt.ItemDataRole.UserRole, result.release_id if column == 0 else None); self.release_table.setItem(0, column, item)
             self.tabs.setCurrentWidget(self.search_page); self.release_table.selectRow(0)
 
@@ -289,7 +292,7 @@ class MainWindow(QMainWindow):
 
     def show_about(self) -> None:
         details = build_metadata()
-        QMessageBox.information(self, "О Vinyl Deals", f"Vinyl Deals Russia\nВерсия: {details.get('version', 'unknown')}\nСборка: {details.get('build_date', 'unknown')}\nCommit: {details.get('commit', 'unknown')}")
+        QMessageBox.information(self, "О Vinyl Deals", f"Vinyl Deals Russia\nВерсия: {details.get('version', 'unknown')}\nСборка: {details.get('build_date', 'unknown')}\nCommit: {details.get('commit', 'unknown')}\n\nDiscogs data provided by Discogs.")
 
     def run_scheduler_cycle(self) -> None:
         if self._scheduler_start_allowed() and self.scheduler.trigger(): self.status_label.setText("Обновление...")
@@ -362,6 +365,9 @@ class MainWindow(QMainWindow):
         worker = self._alert_worker
         if worker and worker.isRunning():
             worker.wait()
+        worker = self._discogs_worker
+        if worker and worker.isRunning():
+            worker.wait()
         super().closeEvent(event)
 
     def _criteria(self) -> dict[str, object] | None:
@@ -390,7 +396,7 @@ class MainWindow(QMainWindow):
         for result in self.results:
             row = self.release_table.rowCount()
             self.release_table.insertRow(row)
-            values = (result.artist, result.title, result.label or "", result.catalog_number or "", str(result.release_year or ""), result.format or "", result.barcode or "")
+            values = (result.artist, result.title, result.label or "", result.catalog_number or "", str(result.release_year or ""), result.format or "", result.barcode or "", result.discogs_confidence or "поиск")
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if column == 0:
@@ -449,6 +455,29 @@ class MainWindow(QMainWindow):
         possible = len(getattr(result, "possible_matches", ()))
         suffix = f"; возможных совпадений: {possible}" if possible else ""
         self.status_label.setText(f"Найдено релизов: {len(self.results)}{suffix}")
+        self._start_discogs_enrichment(tuple(item.release_id for item in self.results))
+
+    def _start_discogs_enrichment(self, release_ids: tuple[int, ...]) -> None:
+        """Store prices remain visible while the optional API work happens later."""
+        if not release_ids or self._closing or (self._discogs_worker and self._discogs_worker.isRunning()):
+            return
+        service = self.discogs_service_factory(self.repository)
+        self._discogs_worker = TaskWorker(lambda: [service.enrich_release(release_id) for release_id in release_ids])
+        self._discogs_worker.completed.connect(self._discogs_completed)
+        self._discogs_worker.finished.connect(self._discogs_finished)
+        self._discogs_worker.start()
+
+    def _discogs_completed(self, _result: object) -> None:
+        criteria = self._criteria()
+        if criteria is not None:
+            self.results = self.search_service(self.repository, **criteria)
+            self._render_search_results()
+
+    def _discogs_finished(self) -> None:
+        worker = self._discogs_worker
+        self._discogs_worker = None
+        if worker:
+            worker.deleteLater()
 
     def _live_search_failed(self, message: str) -> None:
         self.status_label.setText(f"Ошибка live-поиска: {message}")
