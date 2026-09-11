@@ -6,6 +6,7 @@ from PySide6.QtTest import QTest
 
 from vinyl_deals.domain import Availability, RawOffer
 from vinyl_deals.gui.main_window import MainWindow
+from vinyl_deals.live_search import LiveSearchResult
 from vinyl_deals.matching.service import build_match_queue
 from vinyl_deals.search import search_releases
 
@@ -55,6 +56,18 @@ def test_tracking_add_edit_toggle_remove_and_show_alert(qapp, tmp_path):
     window.close()
 
 
+def test_tracking_shows_targeted_refresh_state(qapp, tmp_path):
+    window = MainWindow(tmp_path / "tracking-state.sqlite3", search_service=search_releases)
+    release_id = populated_repository(window)
+    window.repository.add_watchlist(release_id)
+    window.repository.record_watch_refresh(release_id, status="PARTIAL", offer_count=4, checked_at="2026-09-11T12:00:00+00:00")
+    window.refresh_tracking()
+    assert window.watch_table.item(0, 9).text() == "2026-09-11T12:00:00+00:00"
+    assert window.watch_table.item(0, 10).text() == "PARTIAL"
+    assert window.watch_table.item(0, 11).text() == "4"
+    window.close()
+
+
 def test_scheduler_controls_are_persisted_in_gui(qapp, tmp_path):
     window = MainWindow(tmp_path / "settings.sqlite3")
     assert not window.scheduler_enabled.isChecked()
@@ -76,12 +89,13 @@ def test_scheduler_controls_are_persisted_in_gui(qapp, tmp_path):
 def test_scheduler_cycle_keeps_gui_controls_disabled_until_finished(qapp, tmp_path):
     started, unblock = Event(), Event()
 
-    def refresh(*_args, **_kwargs):
+    def targeted(_repository, query):
         started.set()
         unblock.wait(1)
-        return ()
+        return LiveSearchResult(query, (), ())
 
-    window = MainWindow(tmp_path / "cycle.sqlite3", update_service=refresh)
+    window = MainWindow(tmp_path / "cycle.sqlite3", live_search_service=targeted)
+    window.repository.add_watchlist(populated_repository(window))
     window.run_scheduler_cycle()
     for _ in range(50):
         qapp.processEvents()
@@ -162,12 +176,13 @@ def test_scheduler_and_manual_send_are_mutually_exclusive(qapp, tmp_path, monkey
 def test_scheduler_cycle_blocks_manual_send_and_displays_next_check(qapp, tmp_path, monkeypatch):
     started, unblock = Event(), Event()
 
-    def refresh(*_args, **_kwargs):
+    def targeted(_repository, query):
         started.set()
         unblock.wait(1)
-        return ()
+        return LiveSearchResult(query, (), ())
 
-    window = MainWindow(tmp_path / "exclusive-cycle.sqlite3", update_service=refresh)
+    window = MainWindow(tmp_path / "exclusive-cycle.sqlite3", live_search_service=targeted)
+    window.repository.add_watchlist(populated_repository(window))
     window.scheduler_enabled.setChecked(True)
     window.scheduler_interval.setCurrentText("30")
     window.run_scheduler_cycle()

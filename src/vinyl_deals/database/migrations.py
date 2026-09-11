@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-CURRENT_VERSION = 6
+CURRENT_VERSION = 7
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS raw_products (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_product_id TEXT NOT NULL, fetched_at TEXT NOT NULL, payload_json TEXT NOT NULL, UNIQUE(source, source_product_id));
@@ -175,6 +175,22 @@ def migrate_v6(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_discogs_one_confirmed_per_release ON discogs_release_matches(release_id) WHERE status='confirmed'")
 
 
+def migrate_v7(connection: sqlite3.Connection) -> None:
+    """Persist targeted-refresh state independently from alert history."""
+    # Some development v5 databases predated the watchlist tables despite the
+    # recorded version.  Recover them conservatively before adding columns.
+    if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='watchlist'").fetchone():
+        migrate_v3(connection)
+    columns = _columns(connection, "watchlist")
+    for name, definition in {
+        "last_checked_at": "TEXT",
+        "last_check_status": "TEXT",
+        "last_offer_count": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE watchlist ADD COLUMN {name} {definition}")
+
+
 def migrate(connection: sqlite3.Connection) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version > CURRENT_VERSION:
@@ -202,3 +218,7 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 6:
         migrate_v6(connection)
         connection.execute("PRAGMA user_version = 6")
+        version = 6
+    if version < 7:
+        migrate_v7(connection)
+        connection.execute("PRAGMA user_version = 7")

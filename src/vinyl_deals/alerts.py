@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from collections.abc import Iterable
 
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.domain import Availability, RawOffer, Release
@@ -78,11 +79,14 @@ def _payload(release: Release, offer: RawOffer, deal, event_type: str) -> dict[s
     }
 
 
-def evaluate_watchlist(repository: SQLiteRepository, *, now: datetime | None = None, freshness_days: int = DEFAULT_FRESHNESS_DAYS) -> list[AlertCandidate]:
+def evaluate_watchlist(repository: SQLiteRepository, *, now: datetime | None = None, freshness_days: int = DEFAULT_FRESHNESS_DAYS, release_ids: Iterable[int] | None = None) -> list[AlertCandidate]:
     """Evaluate enabled watches and persist only alert states not seen before."""
     point = now or datetime.now(timezone.utc)
     candidates: list[AlertCandidate] = []
+    selected_ids = set(release_ids) if release_ids is not None else None
     for entry in repository.watchlist_entries(enabled_only=True):
+        if selected_ids is not None and int(entry["release_id"]) not in selected_ids:
+            continue
         release = repository.release_by_id(int(entry["release_id"]))
         if release is None:
             continue

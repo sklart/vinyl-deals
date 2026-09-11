@@ -70,7 +70,7 @@ class MainWindow(QMainWindow):
         self._search_performed = False
         self._updating = False
         self._closing = False
-        self.scheduler = scheduler_factory(self.repository, refresh_service=update_service, parent=self)
+        self.scheduler = scheduler_factory(self.repository, live_search_service=live_search_service, parent=self)
         self.scheduler.start_guard = self._scheduler_start_allowed
         self.setWindowTitle("Vinyl Deals Russia")
         self._build_ui()
@@ -157,7 +157,7 @@ class MainWindow(QMainWindow):
         self.watch_open_button = QPushButton("Открыть предложения")
         for button in (self.watch_add_button, self.watch_remove_button, self.watch_enable_button, self.watch_edit_button, self.watch_open_button): controls.addWidget(button)
         layout.addLayout(controls)
-        self.watch_table = self._table(("Исполнитель", "Альбом", "Вкл.", "Макс. цена", "Min deal", "Local", "Город", "Самовывоз", "Последний alert"), "watch_table")
+        self.watch_table = self._table(("Исполнитель", "Альбом", "Вкл.", "Макс. цена", "Min deal", "Local", "Город", "Самовывоз", "Последний alert", "Последняя проверка", "Статус", "Предложений"), "watch_table")
         layout.addWidget(self.watch_table, 1)
         scheduler_controls = QHBoxLayout()
         self.scheduler_enabled = QCheckBox("Автопроверка")
@@ -205,7 +205,7 @@ class MainWindow(QMainWindow):
         self.watch_table.setRowCount(0)
         for entry in self.repository.watchlist_entries():
             row = self.watch_table.rowCount(); self.watch_table.insertRow(row)
-            values = (entry["artist"], entry["title"], "Да" if entry["enabled"] else "Нет", entry["max_price"] or "", entry["min_deal_class"] or "GOOD", "Да" if entry["local_only"] else "Нет", entry["city"] or "", "Да" if entry["pickup_only"] else "Нет", self._last_alert_text(int(entry["release_id"])))
+            values = (entry["artist"], entry["title"], "Да" if entry["enabled"] else "Нет", entry["max_price"] or "", entry["min_deal_class"] or "GOOD", "Да" if entry["local_only"] else "Нет", entry["city"] or "", "Да" if entry["pickup_only"] else "Нет", self._last_alert_text(int(entry["release_id"])), entry["last_checked_at"] or "—", entry["last_check_status"] or "—", entry["last_offer_count"])
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value)); item.setData(Qt.ItemDataRole.UserRole, entry["release_id"]); self.watch_table.setItem(row, column, item)
         self.alert_table.setRowCount(0)
@@ -313,11 +313,15 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "О Vinyl Deals", f"Vinyl Deals Russia\nВерсия: {details.get('version', 'unknown')}\nСборка: {details.get('build_date', 'unknown')}\nCommit: {details.get('commit', 'unknown')}\n\nDiscogs data provided by Discogs.")
 
     def run_scheduler_cycle(self) -> None:
-        if self._scheduler_start_allowed() and self.scheduler.trigger(): self.status_label.setText("Обновление...")
+        if self._scheduler_start_allowed() and self.scheduler.trigger(): self.status_label.setText("Проверка watchlist...")
 
     def _scheduler_completed(self, result: object) -> None:
         count = result.get("alerts", 0) if isinstance(result, dict) else 0
-        status = f"Новых alerts: {count}"
+        checked = result.get("checked", 0) if isinstance(result, dict) else 0
+        partial = result.get("partial", 0) if isinstance(result, dict) else 0
+        status = f"Проверено: {checked}; новых alerts: {count}"
+        if partial:
+            status += f"; частичных: {partial}"
         if self.scheduler.enabled:
             status += f". Следующая проверка: через {self.scheduler.interval_minutes} мин."
         self.status_label.setText(status); self.refresh_tracking()

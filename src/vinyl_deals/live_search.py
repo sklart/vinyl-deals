@@ -63,7 +63,7 @@ def _materialize(repository: SQLiteRepository, discovered: list[RawOffer], query
     build_match_queue(repository)
     searched_ids = [offer_id for offer_id, offer in repository.offers_for_matching() if (offer.source, offer.source_product_id) in unique]
     repository.ensure_releases_for_unmatched_offers(searched_ids)
-    releases = search_releases(repository, artist=query.artist, title=query.title, barcode=query.barcode, catalog=query.catalog_number, now=datetime.now(timezone.utc))
+    releases = search_releases(repository, artist=query.artist, title=query.title, barcode=query.barcode, catalog=query.catalog_number, label=query.label, now=datetime.now(timezone.utc))
     return tuple(sorted(releases, key=lambda release: (release.artist.casefold(), release.title.casefold(), release.release_id)))
 
 
@@ -71,6 +71,7 @@ def _cached_offers(repository: SQLiteRepository, source: str, query: StoreSearch
     """Small persisted fallback only; it never starts a catalogue crawl."""
     barcode = normalize_barcode(query.barcode) if query.barcode else None
     catalog = catalog_number(query.catalog_number) if query.catalog_number else ""
+    label = text(query.label) if query.label else ""
     terms = [text(value) for value in (query.artist, query.title) if value]
     found = []
     for _, offer in repository.offers_for_matching():
@@ -79,6 +80,8 @@ def _cached_offers(repository: SQLiteRepository, source: str, query: StoreSearch
         if barcode and normalize_barcode(offer.barcode) != barcode:
             continue
         if catalog and catalog not in catalog_number(offer.catalog_number_raw):
+            continue
+        if label and label not in text(offer.label):
             continue
         value = " ".join(part or "" for part in (offer.artist_raw, offer.title_raw))
         if terms and not all(term in text(value) for term in terms):
@@ -136,6 +139,7 @@ def _validated_identifiers(offers: list[RawOffer], query: StoreSearchQuery) -> l
     """Use enriched identifiers as a high-confidence exclusion, not a prerequisite."""
     wanted_barcode = normalize_barcode(query.barcode) if query.barcode else None
     wanted_catalog = catalog_number(query.catalog_number) if query.catalog_number else ""
+    wanted_label = text(query.label) if query.label else ""
     accepted: list[RawOffer] = []
     for offer in offers:
         actual_barcode = normalize_barcode(offer.barcode)
@@ -143,6 +147,8 @@ def _validated_identifiers(offers: list[RawOffer], query: StoreSearchQuery) -> l
         if wanted_barcode and actual_barcode and actual_barcode != wanted_barcode:
             continue
         if wanted_catalog and actual_catalog and wanted_catalog not in actual_catalog:
+            continue
+        if wanted_label and offer.label and wanted_label not in text(offer.label):
             continue
         accepted.append(offer)
     return accepted

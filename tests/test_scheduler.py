@@ -28,7 +28,7 @@ def wait_until(qapp, predicate):
 
 
 def test_scheduler_is_disabled_by_default_and_uses_supported_intervals(qapp, tmp_path):
-    scheduler = Scheduler(SQLiteRepository(tmp_path / "scheduler.sqlite3"), refresh_service=lambda *_args, **_kwargs: ())
+    scheduler = Scheduler(SQLiteRepository(tmp_path / "scheduler.sqlite3"))
     assert not scheduler.timer.isActive()
     scheduler.configure(enabled=True, interval_minutes=30, auto_send=True)
     assert scheduler.timer.isActive()
@@ -63,12 +63,14 @@ def test_scheduler_does_not_run_two_cycles_at_once(qapp, tmp_path, monkeypatch):
 def test_scheduler_shutdown_waits_for_active_worker(qapp, tmp_path):
     started, unblock = Event(), Event()
 
-    def refresh(*_args, **_kwargs):
+    def cycle(*_args, **_kwargs):
         started.set()
         unblock.wait(1)
-        return ()
+        return {"watched": 0, "checked": 0, "partial": 0, "offers_updated": 0, "alerts": 0, "sent": 0, "failed": 0}
 
-    scheduler = Scheduler(SQLiteRepository(tmp_path / "shutdown.sqlite3"), refresh_service=refresh)
+    original = scheduler_module.run_cycle
+    scheduler_module.run_cycle = cycle
+    scheduler = Scheduler(SQLiteRepository(tmp_path / "shutdown.sqlite3"))
     assert scheduler.trigger()
     # A just-started QThread may not report isRunning() yet, but Scheduler
     # must keep ownership until its authoritative finished signal arrives.
@@ -77,5 +79,6 @@ def test_scheduler_shutdown_waits_for_active_worker(qapp, tmp_path):
     worker = scheduler.worker
     Timer(0.05, unblock.set).start()
     scheduler.shutdown()
+    scheduler_module.run_cycle = original
     assert worker is not None and not worker.isRunning()
     assert not scheduler.timer.isActive()
