@@ -86,6 +86,29 @@ def test_multiple_distinct_watches_are_processed_sequentially(tmp_path):
     assert [line.split(":", 1)[0] for line in progress] == ["Проверка 1/2", "Проверка 2/2"]
 
 
+def test_timeout_marks_one_watch_partial_and_batch_continues(tmp_path):
+    repository = SQLiteRepository(tmp_path / "watch.sqlite3")
+    first = _release(repository, "1", barcode=None, catalog="CAT-A", label="Label")
+    second = _release(repository, "2", barcode=None, catalog="CAT-B", label="Label")
+    repository.add_watchlist(first.id)
+    repository.add_watchlist(second.id)
+    calls = []
+
+    def search(_repository, query):
+        calls.append(query.catalog_number)
+        if query.catalog_number == "CAT-A":
+            return _result(query, offers=2, statuses=(StoreSearchStatus.FOUND, StoreSearchStatus.TIMEOUT))
+        return _result(query, offers=1)
+
+    result = refresh_watchlist(repository, live_search_service=search)
+
+    entries = {entry["release_id"]: entry for entry in repository.watchlist_entries()}
+    assert calls == ["CAT-A", "CAT-B"]
+    assert result.checked == 2 and result.partial == 1
+    assert entries[first.id]["last_check_status"] == "PARTIAL"
+    assert entries[second.id]["last_check_status"] == "OK"
+
+
 def test_no_watchlist_causes_zero_network_calls_and_scheduler_skips_full_refresh(tmp_path):
     repository = SQLiteRepository(tmp_path / "watch.sqlite3")
     calls = []
