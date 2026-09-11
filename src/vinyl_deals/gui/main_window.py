@@ -110,10 +110,18 @@ class MainWindow(QMainWindow):
         buttons.addStretch()
         layout.addLayout(buttons)
         splitter = QSplitter(Qt.Orientation.Vertical)
-        self.release_table = self._table(("Исполнитель", "Альбом", "Label", "Catalog", "Год", "Формат", "Barcode", "Предложений", "Магазинов", "Discogs"), "release_table")
+        self.release_table = self._table(("Исполнитель", "Альбом", "Label", "Catalog", "Год", "Формат", "Barcode", "Лучшая цена", "Лучшая итоговая", "Медиана", "Deal %", "Предложений", "Магазинов", "Discogs"), "release_table")
         self.offer_table = self._table(("Магазин", "Цена", "Итоговая цена", "Самовывоз", "Состояние", "Наличие", "Deal %", "Класс"), "offer_table")
         splitter.addWidget(self.release_table)
-        splitter.addWidget(self.offer_table)
+        offers_panel = QWidget()
+        offers_layout = QVBoxLayout(offers_panel)
+        offers_layout.setContentsMargins(0, 0, 0, 0)
+        self.release_summary = QLabel("Выберите Release, чтобы увидеть сводку цен.")
+        self.release_summary.setObjectName("release_summary")
+        self.release_summary.setWordWrap(True)
+        offers_layout.addWidget(self.release_summary)
+        offers_layout.addWidget(self.offer_table, 1)
+        splitter.addWidget(offers_panel)
         splitter.setSizes([280, 320])
         layout.addWidget(splitter, 1)
         self.discogs_attribution = QLabel("Discogs data provided by Discogs.")
@@ -258,7 +266,7 @@ class MainWindow(QMainWindow):
         self.release_table.setRowCount(0)
         if self.results:
             result = self.results[0]; self.release_table.insertRow(0)
-            for column, value in enumerate((result.artist, result.title, result.label or "", result.catalog_number or "", str(result.release_year or ""), result.format or "", result.barcode or "", str(result.offer_count), str(result.store_count), result.discogs_confidence or "поиск")):
+            for column, value in enumerate(self._release_row_values(result)):
                 item = QTableWidgetItem(value); item.setData(Qt.ItemDataRole.UserRole, result.release_id if column == 0 else None); self.release_table.setItem(0, column, item)
             self.tabs.setCurrentWidget(self.search_page); self.release_table.selectRow(0)
 
@@ -401,6 +409,7 @@ class MainWindow(QMainWindow):
         self.release_table.setRowCount(0)
         self.offer_table.setRowCount(0)
         self.selected_result = None
+        self.release_summary.setText("Выберите Release, чтобы увидеть сводку цен.")
         self._update_open_actions()
         for result in self.results:
             row = self.release_table.rowCount()
@@ -408,7 +417,7 @@ class MainWindow(QMainWindow):
             discogs = result.discogs_confidence or "поиск"
             if result.has_possible_matches:
                 discogs += " · possible"
-            values = (result.artist, result.title, result.label or "", result.catalog_number or "", str(result.release_year or ""), result.format or "", result.barcode or "", str(result.offer_count), str(result.store_count), discogs)
+            values = self._release_row_values(result, discogs)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if column == 0:
@@ -554,7 +563,9 @@ class MainWindow(QMainWindow):
         result = self.selected_result
         self._update_open_actions()
         if not result:
+            self.release_summary.setText("Выберите Release, чтобы увидеть сводку цен.")
             return
+        self.release_summary.setText(self._summary_text(result))
         highlights: dict[int, list[str]] = {}
         for name, offer in (("Lowest price", result.lowest_price_offer), ("Best effective", result.best_effective_offer), ("Best new", result.best_new_offer), ("Best used", result.best_used_offer)):
             if offer:
@@ -582,6 +593,33 @@ class MainWindow(QMainWindow):
                 self.offer_table.setItem(row, column, item)
         if not result.offers:
             self.status_label.setText("Нет актуальных предложений")
+
+    @staticmethod
+    def _money(value: Decimal | None) -> str:
+        return f"{value} ₽" if value is not None else "—"
+
+    def _release_row_values(self, result: ReleaseSearchResult, discogs: str | None = None) -> tuple[str, ...]:
+        discogs_value = discogs if discogs is not None else result.discogs_confidence or "поиск"
+        return (
+            result.artist, result.title, result.label or "", result.catalog_number or "",
+            str(result.release_year or ""), result.format or "", result.barcode or "",
+            self._money(result.lowest_price_offer.price if result.lowest_price_offer else None),
+            self._money(result.best_effective_offer.effective_price if result.best_effective_offer and result.best_effective_offer.effective_price_known else None),
+            self._money(result.market_median),
+            f"{result.discount_pct:.1f}%" if result.discount_pct is not None else "—",
+            str(result.offer_count), str(result.store_count), discogs_value,
+        )
+
+    def _summary_text(self, result: ReleaseSearchResult) -> str:
+        best = result.lowest_price_offer
+        best_text = f"{self._money(best.price)} · {best.store}" if best else "—"
+        effective = self._money(result.best_effective_offer.effective_price) if result.best_effective_offer and result.best_effective_offer.effective_price_known else "—"
+        if result.market_median is None or result.discount_pct is None:
+            assessment = "Медиана: — · Выгода: — · Оценка: недостаточно данных"
+        else:
+            deal = result.deal_class.value if result.deal_class else "—"
+            assessment = f"Медиана: {self._money(result.market_median)} · Выгода: {result.discount_pct:.1f}% · {deal}"
+        return f"Лучшая цена: {best_text}    Лучшая итоговая: {effective}\n{assessment}\nПредложений: {result.offer_count} · Магазинов: {result.store_count} · Сравнений: {result.comparable_count}"
 
     def _update_open_actions(self) -> None:
         selected = self.offer_table.selectedItems()

@@ -25,6 +25,33 @@ def test_same_barcode_consolidates_and_search_counts_all_offers(tmp_path):
     assert rows[0].lowest_price_offer.price == Decimal("4500")
 
 
+def test_consolidated_release_pricing_uses_all_store_offers(tmp_path):
+    repository = SQLiteRepository(tmp_path / "offers.sqlite3")
+    repository.upsert_offer(offer("one", "1", barcode="4006381333931", price=Decimal("4290"), condition_media="NEW"))
+    repository.upsert_offer(offer("two", "2", barcode="4006381333931", price=Decimal("5850"), condition_media="NEW"))
+    repository.upsert_offer(offer("three", "3", barcode="4006381333931", price=Decimal("6000"), condition_media="NEW"))
+    build_match_queue(repository)
+    result = search_releases(repository, artist="pink")[0]
+    assert result.offer_count == result.store_count == 3
+    assert result.lowest_price_offer.price == Decimal("4290")
+    assert result.market_median == Decimal("5925")
+    assert result.comparable_count == 2
+    assert result.discount_pct == Decimal("27.59493670886075949367088608")
+    # Two foreign stores are a small sample: the discount is visible, but the
+    # conservative pricing policy caps the class below HOT.
+    assert result.deal_class.value == "GOOD"
+
+
+def test_single_consolidated_offer_has_no_market_discount(tmp_path):
+    repository = SQLiteRepository(tmp_path / "offers.sqlite3")
+    repository.upsert_offer(offer("one", "1", barcode="4006381333931", condition_media="NEW"))
+    repository.ensure_releases_for_unmatched_offers()
+    result = search_releases(repository, artist="pink")[0]
+    assert result.market_median is None
+    assert result.discount_pct is None
+    assert result.deal_class.value == "INSUFFICIENT"
+
+
 def test_conflicting_pressings_stay_separate(tmp_path):
     repository = SQLiteRepository(tmp_path / "offers.sqlite3")
     repository.upsert_offer(offer("one", "1", barcode="4006381333931", release_year=1975, format="LP"))

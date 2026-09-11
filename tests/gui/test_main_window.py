@@ -8,6 +8,7 @@ from vinyl_deals.gui.main_window import MainWindow
 from vinyl_deals.domain import StoreSearchQuery, StoreState
 from vinyl_deals.live_search import LiveSearchResult, LiveStoreResult
 from vinyl_deals.search import OfferSearchResult, ReleaseSearchResult
+from vinyl_deals.pricing import DealClass
 
 
 def offer(identifier, store, price, *, availability=Availability.IN_STOCK, condition="NEW", url=None, city=None, local_store=False, pickup_available=False, effective_price=None, effective_price_known=False):
@@ -74,6 +75,39 @@ def test_window_shows_local_pickup_and_effective_price(qapp, tmp_path):
     assert window.offer_table.item(local_row, 3).text() == "Да"
     assert window.offer_table.item(remote_row, 2).text() == "?"
     assert "Best effective" in window.offer_table.item(local_row, 2).toolTip()
+    window.close()
+
+
+def test_window_shows_release_prices_median_and_deal_without_selecting_offer(qapp, tmp_path):
+    new = offer(1, "Imagine Club", 4290, effective_price=Decimal("4790"), effective_price_known=True)
+    second = offer(2, "Vinyl.ru", 5850)
+    item = ReleaseSearchResult(
+        7, "Opeth", "Blackwater Park", None, None, None, None, "LP", (new, second), new, None, new, None,
+        new, offer_count=2, store_count=2, market_median=Decimal("5850"), comparable_count=3,
+        discount_pct=Decimal("26.7"), deal_class=DealClass.GOOD,
+    )
+    window = MainWindow(tmp_path / "gui-prices.sqlite3", search_service=lambda *_args, **_kwargs: [item])
+    window.perform_search()
+    assert window.release_table.item(0, 7).text() == "4290 ₽"
+    assert window.release_table.item(0, 8).text() == "4790 ₽"
+    assert window.release_table.item(0, 9).text() == "5850 ₽"
+    assert window.release_table.item(0, 10).text() == "26.7%"
+    assert window.release_table.item(0, 11).text() == "2"
+    assert window.release_table.item(0, 12).text() == "2"
+    assert "Лучшая цена: 4290 ₽ · Imagine Club" in window.release_summary.text()
+    assert "Выгода: 26.7% · GOOD" in window.release_summary.text()
+    window.close()
+
+
+def test_window_does_not_invent_effective_price_or_deal_for_single_offer(qapp, tmp_path):
+    single = offer(1, "Imagine Club", 4290)
+    item = ReleaseSearchResult(7, "Opeth", "Blackwater Park", None, None, None, None, "LP", (single,), single, None, single, None, offer_count=1, store_count=1)
+    window = MainWindow(tmp_path / "gui-insufficient.sqlite3", search_service=lambda *_args, **_kwargs: [item])
+    window.perform_search()
+    assert window.release_table.item(0, 8).text() == "—"
+    assert window.release_table.item(0, 9).text() == "—"
+    assert window.release_table.item(0, 10).text() == "—"
+    assert "Оценка: недостаточно данных" in window.release_summary.text()
     window.close()
 
 
