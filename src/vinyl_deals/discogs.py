@@ -135,6 +135,11 @@ def _classify(release: Release, metadata: dict[str, object]) -> tuple[DiscogsCon
     )
     if any(physical_conflicts):
         return DiscogsConfidence.DIFFERENT, "physical_conflict"
+    local_tags = {text(tag).replace(" ", "_") for tag in release.edition_tags}
+    remote_tags = {text(str(tag)).replace(" ", "_") for tag in metadata.get("edition_tags", [])}
+    tag_pairs = (("mono", "stereo"), ("colored", "black"), ("colour", "black"), ("picture_disc", "normal"), ("box_set", "single"))
+    if any(left in local_tags and right in remote_tags or right in local_tags and left in remote_tags for left, right in tag_pairs):
+        return DiscogsConfidence.DIFFERENT, "edition_conflict"
     local_barcode, remote_barcode = digits(release.barcode), digits(str(metadata.get("barcode") or ""))
     if local_barcode and remote_barcode:
         return (DiscogsConfidence.EXACT, "barcode") if local_barcode == remote_barcode else (DiscogsConfidence.DIFFERENT, "barcode_conflict")
@@ -143,7 +148,8 @@ def _classify(release: Release, metadata: dict[str, object]) -> tuple[DiscogsCon
     if local_catalog and remote_catalog:
         if local_catalog != remote_catalog:
             return DiscogsConfidence.DIFFERENT, "catalog_conflict"
-        return (DiscogsConfidence.HIGH if labels_match else DiscogsConfidence.POSSIBLE, "catalog_and_label" if labels_match else "catalog")
+        artist_title_confirmed = bool(remote_artist and remote_title)
+        return (DiscogsConfidence.HIGH if labels_match and artist_title_confirmed else DiscogsConfidence.POSSIBLE, "catalog_and_label" if labels_match and artist_title_confirmed else "catalog")
     artist_title = bool(remote_artist and remote_title)
     corroboration = sum((release.release_year is not None and release.release_year == metadata.get("release_year"), bool(release.format and metadata.get("format") and text(release.format) in text(str(metadata["format"]))),))
     return (DiscogsConfidence.HIGH, "artist_title_metadata") if corroboration else (DiscogsConfidence.POSSIBLE, "artist_title")

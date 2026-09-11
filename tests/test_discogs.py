@@ -9,9 +9,9 @@ from vinyl_deals.domain import RawOffer
 from vinyl_deals.search import search_releases
 
 
-def _repo(tmp_path, *, barcode: str | None = "724349792891", disc_count: int | None = None):
+def _repo(tmp_path, *, barcode: str | None = "724349792891", disc_count: int | None = None, edition_tags: tuple[str, ...] = ()):
     repository = SQLiteRepository(tmp_path / "vinyl.sqlite3")
-    repository.upsert_offer(RawOffer.now(source="shop", source_product_id="1", url="https://shop/1", artist_raw="Pink Floyd", title_raw="Wish You Were Here", barcode=barcode, label="Harvest", catalog_number_raw="SHVL 814", release_year=1975, format="LP", disc_count=disc_count))
+    repository.upsert_offer(RawOffer.now(source="shop", source_product_id="1", url="https://shop/1", artist_raw="Pink Floyd", title_raw="Wish You Were Here", barcode=barcode, label="Harvest", catalog_number_raw="SHVL 814", release_year=1975, format="LP", disc_count=disc_count, edition_tags=edition_tags))
     repository.ensure_releases_for_unmatched_offers()
     return repository, repository.releases_for_search()[0]
 
@@ -122,3 +122,29 @@ def test_partial_failure_still_persists_prior_candidate(tmp_path):
     service = DiscogsService(repository, DiscogsApiClient(token="test-token", fetch=fetch, max_retries=0))
     assert service.enrich_release(release.id)
     assert repository.confirmed_discogs_match(release.id)
+
+
+def test_catalog_label_without_artist_title_is_only_possible(tmp_path):
+    repository, release = _repo(tmp_path, barcode=None)
+    detail = _detail()
+    detail["artists"] = []
+    detail["title"] = ""
+    candidate = _service(repository, [detail], []).enrich_release(release.id)[0]
+    assert candidate.confidence == DiscogsConfidence.POSSIBLE
+
+
+def test_edition_conflict_is_different(tmp_path):
+    repository, release = _repo(tmp_path, edition_tags=("mono",))
+    detail = _detail()
+    detail["formats"][0]["descriptions"].append("Stereo")
+    candidate = _service(repository, [detail], []).enrich_release(release.id)[0]
+    assert candidate.confidence == DiscogsConfidence.DIFFERENT
+
+
+def test_unauthorized_discogs_is_isolated(tmp_path):
+    repository, release = _repo(tmp_path)
+    def unauthorized(_url, _headers, _timeout):
+        raise HTTPError("https://api.discogs.com", 401, "unauthorized", {}, None)
+    service = DiscogsService(repository, DiscogsApiClient(token="invalid-token", fetch=unauthorized, max_retries=0))
+    assert service.enrich_release(release.id) == []
+    assert search_releases(repository)[0].title == "Wish You Were Here"

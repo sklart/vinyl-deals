@@ -623,7 +623,25 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
         index = labels.index(selected)
-        self.repository.confirm_discogs_match(self.selected_result.release_id, int(choices[index]["discogs_release_id"]))
+        candidate = choices[index]
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Проверка Discogs кандидата")
+        metadata = candidate["metadata"]
+        dialog.setText("#{}\n{} — {}\n{} / {}\n{} / {}\nBarcode: {}\nФормат: {}".format(
+            candidate["discogs_release_id"], metadata.get("artist", "?"), metadata.get("title", "?"),
+            metadata.get("release_year", "?"), metadata.get("country", "?"), metadata.get("label", "?"),
+            metadata.get("catalog_number", "?"), metadata.get("barcode", "?"), metadata.get("format", "?"),
+        ))
+        open_button = dialog.addButton("Открыть Discogs", QMessageBox.ButtonRole.ActionRole)
+        confirm_button = dialog.addButton("Подтвердить", QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton(QMessageBox.StandardButton.Cancel)
+        dialog.exec()
+        if dialog.clickedButton() is open_button:
+            self.url_opener(QUrl(str(candidate["discogs_url"])))
+            return
+        if dialog.clickedButton() is not confirm_button:
+            return
+        self.repository.confirm_discogs_match(self.selected_result.release_id, int(candidate["discogs_release_id"]))
         self.perform_search()
 
     def start_refresh(self) -> None:

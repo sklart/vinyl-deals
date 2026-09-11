@@ -164,6 +164,14 @@ def migrate_v5(connection: sqlite3.Connection) -> None:
 
 
 def migrate_v6(connection: sqlite3.Connection) -> None:
+    # A pre-release v5 build could have persisted more than one auto-confirmed
+    # candidate.  Preserve all evidence, but make the ambiguity explicit
+    # before adding the constraint rather than guessing a winner.
+    connection.execute(
+        "UPDATE discogs_release_matches SET status='possible' "
+        "WHERE status='confirmed' AND release_id IN ("
+        "SELECT release_id FROM discogs_release_matches WHERE status='confirmed' GROUP BY release_id HAVING COUNT(*) > 1)"
+    )
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_discogs_one_confirmed_per_release ON discogs_release_matches(release_id) WHERE status='confirmed'")
 
 
