@@ -49,6 +49,8 @@ class Release:
     catalog_number: str | None = None
     release_year: int | None = None
     format: str | None = None
+    country: str | None = None
+    disc_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

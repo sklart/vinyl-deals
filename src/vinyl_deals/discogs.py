@@ -147,11 +147,18 @@ class DiscogsService:
         if release.barcode: queries.append({"barcode": digits(release.barcode), "type": "release"})
         if release.catalog_number: queries.append({"catno": release.catalog_number, "label": release.label, "type": "release"})
         queries.append({"artist": release.artist, "release_title": release.title, "year": release.release_year, "type": "release"})
+        # This is deliberately the weakest lookup: physical metadata can
+        # corroborate a candidate but must not identify a pressing by itself.
+        queries.append({"artist": release.artist, "release_title": release.title, "country": release.country, "format": release.format, "type": "release"})
         return queries
 
     def enrich_release(self, release_id: int) -> list[DiscogsCandidate]:
         release = self.repository.release_by_id(release_id)
         if not release:
+            return []
+        # A confirmed pressing already has fresh, persisted provenance.  Do
+        # not spend rate-limit budget repeatedly during GUI redraws.
+        if self.repository.confirmed_discogs_match(release_id):
             return []
         candidates: dict[int, DiscogsCandidate] = {}
         try:

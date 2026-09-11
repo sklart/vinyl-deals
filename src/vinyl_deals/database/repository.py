@@ -208,13 +208,13 @@ class SQLiteRepository:
         """Return canonical Release metadata for the search service."""
         self.initialize()
         with self._connect() as connection:
-            rows = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format FROM releases ORDER BY artist, title, id").fetchall()
+            rows = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format, country, disc_count FROM releases ORDER BY artist, title, id").fetchall()
         return [Release(*row) for row in rows]
 
     def release_by_id(self, release_id: int) -> Release | None:
         self.initialize()
         with self._connect() as connection:
-            row = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format FROM releases WHERE id=?", (release_id,)).fetchone()
+            row = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format, country, disc_count FROM releases WHERE id=?", (release_id,)).fetchone()
         return Release(*row) if row else None
 
     def discogs_matches(self, release_id: int) -> list[dict[str, object]]:

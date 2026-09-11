@@ -114,6 +114,9 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.offer_table)
         splitter.setSizes([280, 320])
         layout.addWidget(splitter, 1)
+        self.discogs_attribution = QLabel("Discogs data provided by Discogs.")
+        self.discogs_attribution.setObjectName("discogs_attribution")
+        layout.addWidget(self.discogs_attribution)
         self.status_label = QLabel("Введите реквизиты пластинки и нажмите «Найти».")
         self.status_label.setObjectName("status_label")
         layout.addWidget(self.status_label)
@@ -474,8 +477,13 @@ class MainWindow(QMainWindow):
     def _discogs_completed(self, _result: object) -> None:
         criteria = self._criteria()
         if criteria is not None:
-            self.results = self.search_service(self.repository, **criteria)
-            self._render_search_results()
+            refreshed = self.search_service(self.repository, **criteria)
+            # A custom/injected live-search service may expose partial rows
+            # before persistence; never make those rows disappear merely
+            # because the secondary metadata worker completed.
+            if refreshed:
+                self.results = refreshed
+                self._render_search_results()
 
     def _discogs_finished(self) -> None:
         worker = self._discogs_worker
