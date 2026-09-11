@@ -313,7 +313,13 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "О Vinyl Deals", f"Vinyl Deals Russia\nВерсия: {details.get('version', 'unknown')}\nСборка: {details.get('build_date', 'unknown')}\nCommit: {details.get('commit', 'unknown')}\n\nDiscogs data provided by Discogs.")
 
     def run_scheduler_cycle(self) -> None:
-        if self._scheduler_start_allowed() and self.scheduler.trigger(): self.status_label.setText("Проверка watchlist...")
+        if not self._scheduler_start_allowed():
+            return
+        # Set the initial state before creating the worker.  Otherwise a very
+        # fast worker can emit its first ``Проверка N/M`` progress signal and
+        # have it overwritten by this less informative message.
+        self.status_label.setText("Проверка watchlist...")
+        self.scheduler.trigger()
 
     def _scheduler_completed(self, result: object) -> None:
         count = result.get("alerts", 0) if isinstance(result, dict) else 0

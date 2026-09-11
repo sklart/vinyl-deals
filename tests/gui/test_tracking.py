@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from threading import Event, Timer
 
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QSignalSpy, QTest
 
 from vinyl_deals.domain import Availability, RawOffer
 from vinyl_deals.gui.main_window import MainWindow
@@ -96,6 +96,7 @@ def test_scheduler_cycle_keeps_gui_controls_disabled_until_finished(qapp, tmp_pa
 
     window = MainWindow(tmp_path / "cycle.sqlite3", live_search_service=targeted)
     window.repository.add_watchlist(populated_repository(window))
+    running_changes = QSignalSpy(window.scheduler.running_changed)
     window.run_scheduler_cycle()
     for _ in range(50):
         qapp.processEvents()
@@ -115,11 +116,15 @@ def test_scheduler_cycle_keeps_gui_controls_disabled_until_finished(qapp, tmp_pa
     assert not window.watch_add_button.isEnabled()
     assert not window.scheduler_run_button.isEnabled()
     unblock.set()
-    for _ in range(50):
+    # Wait for the real lifecycle signal (True then False), not an arbitrary
+    # UI delay.  Python 3.12 may deliver QThread's finished event a little
+    # later than the worker's Python function returns.
+    for _ in range(200):
         qapp.processEvents()
-        if window.search_button.isEnabled():
+        if running_changes.count() >= 2 and not window.scheduler.running:
             break
         QTest.qWait(10)
+    assert running_changes.count() >= 2
     assert window.search_button.isEnabled()
     assert window.scheduler_run_button.isEnabled()
     window.close()
