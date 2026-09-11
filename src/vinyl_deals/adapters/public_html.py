@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
 from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreState
+from vinyl_deals.matching.normalize import text
 
 _UNSET = object()
 
@@ -148,7 +149,15 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
             if terms and not all(term in haystack for term in terms):
                 continue
             filtered.append(offer)
-        return filtered
+        wanted_artist, wanted_title = text(query.artist), text(query.title)
+        def rank(offer: RawOffer) -> tuple[int, str]:
+            artist, title = text(offer.artist_raw), text(offer.title_raw)
+            # Exact title/artist hits are materially safer than a word merely
+            # occurring in a different album title or description.
+            exact = int(bool(wanted_title and title == wanted_title)) + int(bool(wanted_artist and artist == wanted_artist))
+            title_prefix = int(bool(wanted_title and title.startswith(wanted_title)))
+            return (-exact, -title_prefix, f"{artist} {title}")
+        return sorted(filtered, key=rank)
 
     def parse_listing(self, html: str, *, fetched_at: datetime | None = None) -> list[RawOffer]:
         timestamp = fetched_at or datetime.now(timezone.utc)

@@ -28,7 +28,10 @@ def main() -> int:
     for name in ("remove", "enable", "disable"):
         item = watch_commands.add_parser(name); item.add_argument("release_id", type=int)
     alerts = commands.add_parser("alerts", help="Evaluate and deliver watchlist alerts"); alerts.add_argument("--database", type=Path, default=default_database); alert_commands = alerts.add_subparsers(dest="alert_command", required=True); alert_commands.add_parser("check"); alert_commands.add_parser("list"); alert_commands.add_parser("send")
-    commands.add_parser("doctor", help="Check local configuration"); args = parser.parse_args()
+    commands.add_parser("doctor", help="Check local configuration")
+    repair = commands.add_parser("repair-metadata", help="Normalize legacy metadata and rebuild automatic release matches")
+    repair.add_argument("--database", type=Path, default=default_database)
+    args = parser.parse_args()
     if args.command == "doctor":
         repository = SQLiteRepository(default_database)
         runs = repository.latest_scrape_runs()
@@ -40,6 +43,10 @@ def main() -> int:
                 print(f"- {store}: {status} ({finished_at or 'running'})")
         diagnostics = repository.integrity_diagnostics()
         print("Integrity: OK." if not diagnostics else "Integrity warnings:\n" + "\n".join(f"- {item}" for item in diagnostics))
+        return 0
+    if args.command == "repair-metadata":
+        changed = SQLiteRepository(args.database).repair_metadata()
+        print(f"Repaired metadata for {changed} offers and rebuilt automatic matches.")
         return 0
     if args.command == "watchlist":
         repository = SQLiteRepository(args.database)

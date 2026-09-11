@@ -1,8 +1,10 @@
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from vinyl_deals.adapters.collectomania import CollectomaniaAdapter
 from vinyl_deals.domain import Availability, StoreSearchQuery
 from vinyl_deals.database import SQLiteRepository
+from vinyl_deals.matching.normalize import normalize_barcode
 
 def test_parses_collectomania_listing_offline() -> None:
     adapter = CollectomaniaAdapter(); html = Path("tests/fixtures/collectomania/listing.html").read_text(encoding="utf-8"); offers = adapter.parse_listing(html)
@@ -20,7 +22,9 @@ def test_enriched_collectomania_offer_survives_persistence(tmp_path) -> None:
     enriched = adapter.parse_product_page(Path("tests/fixtures/collectomania/product.html").read_text(encoding="utf-8"), listing)
     repository = SQLiteRepository(tmp_path / "offers.sqlite3")
     repository.upsert_offer(enriched)
-    assert repository.offers_for_matching() == [(1, enriched)]
+    # SQLite is the canonical cache boundary: valid UPC/EAN values are
+    # persisted as GTIN-14 while raw adapter data remains untouched.
+    assert repository.offers_for_matching() == [(1, replace(enriched, barcode=normalize_barcode(enriched.barcode)))]
 
 
 def test_targeted_search_uses_verified_insales_endpoint(monkeypatch) -> None:

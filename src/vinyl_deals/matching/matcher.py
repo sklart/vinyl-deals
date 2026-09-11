@@ -54,9 +54,16 @@ def match_offers(left: RawOffer, right: RawOffer) -> MatchResult:
         (matches if left_barcode == right_barcode else blocking).append("barcode matches" if left_barcode == right_barcode else "barcode differs")
     elif left.barcode or right.barcode:
         unknown.append("barcode is absent or invalid")
+    left_format, left_count = normalize.format_and_disc_count(left.format, left.disc_count)
+    right_format, right_count = normalize.format_and_disc_count(right.format, right.disc_count)
     for attr in ("artist", "title", "format", "disc_count", "vinyl_size", "rpm", "vinyl_color"):
-        a = getattr(left, f"{attr}_raw") if attr in {"artist", "title"} else getattr(left, attr)
-        b = getattr(right, f"{attr}_raw") if attr in {"artist", "title"} else getattr(right, attr)
+        if attr == "format":
+            a, b = left_format, right_format
+        elif attr == "disc_count":
+            a, b = left_count, right_count
+        else:
+            a = getattr(left, f"{attr}_raw") if attr in {"artist", "title"} else getattr(left, attr)
+            b = getattr(right, f"{attr}_raw") if attr in {"artist", "title"} else getattr(right, attr)
         state = compare(a, b)
         if state == Comparison.MATCH: matches.append(f"{attr} matches")
         elif state == Comparison.CONFLICT: blocking.append(f"{attr} differs")

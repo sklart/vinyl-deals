@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from dataclasses import replace
 
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.domain import Availability, RawOffer, StoreSearchQuery
 from vinyl_deals.live_search import _materialize
 from vinyl_deals.matching.service import build_match_queue
+from vinyl_deals.matching.normalize import normalize_barcode
 from vinyl_deals.search import search_releases
 
 
@@ -71,15 +73,27 @@ def test_store_sku_and_long_description_are_not_pressing_metadata(tmp_path):
     assert stored.format is None
 
 
-def test_targeted_live_search_consolidates_same_artist_title_when_metadata_is_missing(tmp_path):
+def test_targeted_live_search_keeps_sparse_same_title_cards_as_possible(tmp_path):
     repository = SQLiteRepository(tmp_path / "offers.sqlite3")
     releases = _materialize(
         repository,
         [offer("one", "1"), offer("two", "2", price=Decimal("4500"))],
         StoreSearchQuery(artist="Pink Floyd", title="Wish You Were Here"),
     )
-    assert len(releases) == 1
-    assert releases[0].offer_count == releases[0].store_count == 2
+    assert len(releases) == 2
+    assert repository.possible_matches()
+
+
+def test_sparse_card_cannot_bridge_different_same_title_pressings(tmp_path):
+    repository = SQLiteRepository(tmp_path / "offers.sqlite3")
+    offers = [
+        offer("tishina", "sparse"),
+        offer("vinyl_ru", "lp", barcode="4006381333931", catalog_number_raw="PCS-7009", format="LP", disc_count=1),
+        offer("vinyl_ru", "box", barcode="0602445599691", catalog_number_raw="REV-5LP", format="5LP", disc_count=5),
+    ]
+    releases = _materialize(repository, offers, StoreSearchQuery(title="Wish You Were Here"))
+    assert len(releases) == 3
+    assert all(item.offer_count == 1 for item in releases)
 
 
 def test_confirmed_discogs_pressing_consolidates_provisional_possible_groups(tmp_path):
@@ -103,3 +117,30 @@ def test_confirmed_discogs_pressing_consolidates_provisional_possible_groups(tmp
         )
     assert repository.consolidate_confirmed_discogs_releases() == 1
     assert len(repository.releases_for_search()) == 1
+
+
+def test_upc_ean_and_gtin14_have_one_canonical_identifier():
+    assert {normalize_barcode(value) for value in ("602445599691", "0602445599691", "00602445599691")} == {"00602445599691"}
+    assert normalize_barcode("1234567890123") is None
+
+
+def test_lp_and_1lp_normalize_without_hiding_disc_count(tmp_path):
+    repository = SQLiteRepository(tmp_path / "formats.sqlite3")
+    repository.upsert_offer(offer("one", "1", format="LP"))
+    repository.upsert_offer(offer("two", "2", format="1LP", disc_count=1))
+    repository.upsert_offer(offer("three", "3", format="5 LP", disc_count=5))
+    assert [(item.format, item.disc_count) for _, item in repository.offers_for_matching()] == [("LP", 1), ("LP", 1), ("LP", 5)]
+
+
+def test_repair_metadata_cleans_legacy_fields_and_rebuilds(tmp_path):
+    repository = SQLiteRepository(tmp_path / "repair.sqlite3")
+    repository.upsert_offer(offer("one", "1", store_sku="SKU-55"))
+    with repository._connect() as connection:
+        raw = replace(repository.offers_for_matching()[0][1], catalog_number_raw="SKU-55", label="Описание товара " * 20, format="2 LP", barcode="0602445599691")
+        connection.execute("UPDATE offers SET catalog_number_raw='SKU-55', label=?, format='2 LP', barcode='0602445599691' WHERE id=1", ("Описание товара " * 20,))
+        # Simulate the old serialized record too, then let repair replace it.
+        connection.execute("UPDATE offers SET offer_json=? WHERE id=1", (__import__("vinyl_deals.database.repository", fromlist=["_serialize_offer"])._serialize_offer(raw),))
+    assert repository.repair_metadata() == 1
+    repaired = repository.offers_for_matching()[0][1]
+    assert repaired.catalog_number_raw is None and repaired.label is None
+    assert (repaired.format, repaired.disc_count, repaired.barcode) == ("LP", 2, "00602445599691")

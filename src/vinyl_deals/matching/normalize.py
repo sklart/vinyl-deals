@@ -25,7 +25,25 @@ def is_valid_gtin(value: str | None) -> bool:
 
 def normalize_barcode(value: str | None) -> str | None:
     digits = barcode(value)
-    return digits if is_valid_gtin(digits) else None
+    if not is_valid_gtin(digits):
+        return None
+    # GTIN-12/UPC and EAN-13 are representations of the same GTIN namespace.
+    # Persisting and matching the left-padded GTIN-14 prevents a shop's UPC
+    # formatting from splitting an otherwise identical pressing.
+    return digits.zfill(14)
+
+
+def format_and_disc_count(value: str | None, disc_count: int | None = None) -> tuple[str | None, int | None]:
+    """Canonicalise record count separately from the physical format label."""
+    raw = text(value).upper()
+    match = re.fullmatch(r"(\d+)\s*LP", raw)
+    if match:
+        return "LP", int(match.group(1))
+    if raw == "LP":
+        return "LP", disc_count or 1
+    if raw == "EP":
+        return "EP", disc_count
+    return (value.strip().upper() if value and len(value.strip()) <= 40 else None), disc_count
 
 def tags(value: tuple[str, ...], edition_raw: str | None = None) -> frozenset[str]:
     source = " ".join((*value, edition_raw or ""))

@@ -8,7 +8,7 @@ from pathlib import Path
 from decimal import Decimal
 from vinyl_deals.domain import Availability, RawOffer, Release
 from vinyl_deals.database.migrations import CURRENT_VERSION, migrate
-from vinyl_deals.matching.normalize import normalize_barcode, text
+from vinyl_deals.matching.normalize import format_and_disc_count, normalize_barcode, text
 from vinyl_deals.matching import match_offers, MatchKind
 
 
@@ -51,7 +51,14 @@ def _clean_offer_metadata(offer: RawOffer) -> RawOffer:
         catalog = None
     if fmt and len(fmt) > 80:
         fmt = None
-    return replace(offer, label=label, catalog_number_raw=catalog, format=fmt)
+    canonical_format, disc_count = format_and_disc_count(fmt, offer.disc_count)
+    # Keep unvalidated text out of strong matching.  The original public
+    # payload remains in raw_data for parser diagnostics.
+    canonical_barcode = normalize_barcode(offer.barcode)
+    return replace(
+        offer, label=label, catalog_number_raw=catalog, format=canonical_format,
+        disc_count=disc_count, barcode=canonical_barcode or offer.barcode,
+    )
 
 def _deserialize_offer(payload: str) -> RawOffer:
     data = json.loads(payload)
@@ -140,6 +147,35 @@ class SQLiteRepository:
             offer_id = connection.execute("SELECT id FROM offers WHERE source=? AND source_product_id=?", (offer.source, offer.source_product_id)).fetchone()[0]
             prior = connection.execute("SELECT 1 FROM price_history WHERE offer_id=? AND observed_at=?", (offer_id, occurred)).fetchone()
             if not prior: connection.execute("INSERT INTO price_history(offer_id, observed_at, price, old_price, availability) VALUES (?, ?, ?, ?, ?)", (offer_id, occurred, str(offer.price) if offer.price is not None else None, str(offer.old_price) if offer.old_price is not None else None, offer.availability))
+
+    def repair_metadata(self) -> int:
+        """Safely normalise legacy offer metadata, retaining raw source data.
+
+        Existing auto-clusters are rebuilt after cleanup: old sparse matches
+        are never retained merely because they were created before stricter
+        pressing rules existed.  Manual decisions remain untouched.
+        """
+        self.initialize()
+        changed = 0
+        with self._connect() as connection:
+            rows = connection.execute("SELECT id, offer_json FROM offers").fetchall()
+            for offer_id, payload in rows:
+                original = _deserialize_offer(payload)
+                cleaned = _clean_offer_metadata(original)
+                if cleaned == original:
+                    continue
+                changed += 1
+                connection.execute(
+                    "UPDATE offers SET barcode=?, catalog_number_raw=?, label=?, format=?, disc_count=?, offer_json=? WHERE id=?",
+                    (cleaned.barcode, cleaned.catalog_number_raw, cleaned.label, cleaned.format, cleaned.disc_count, _serialize_offer(cleaned), offer_id),
+                )
+            release_ids = [row[0] for row in connection.execute("SELECT id FROM releases").fetchall()]
+            connection.execute("DELETE FROM release_matches WHERE status NOT IN ('confirmed_same', 'confirmed_different', 'ignored')")
+            for release_id in release_ids:
+                self.rebuild_release_cluster(release_id, connection)
+        from vinyl_deals.matching.service import build_match_queue
+        build_match_queue(self)
+        return changed
 
     def record_match(self, offer_id: int, candidate_offer_id: int, kind: str, confidence: float, reasons: tuple[str, ...]) -> None:
         self.initialize()

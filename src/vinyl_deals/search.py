@@ -9,8 +9,7 @@ from urllib.parse import urlencode
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.domain import Availability, RawOffer, Release
 from vinyl_deals.effective_price import calculate_effective_price
-from vinyl_deals.matching.normalize import barcode as normalized_barcode
-from vinyl_deals.matching.normalize import catalog_number, text
+from vinyl_deals.matching.normalize import catalog_number, normalize_barcode, text
 from vinyl_deals.pricing import DEFAULT_FRESHNESS_DAYS, DealClass, condition_bucket, evaluate_offer
 
 
@@ -68,7 +67,7 @@ class ReleaseSearchResult:
 def discogs_search_url(release: Release) -> str | None:
     """Build a search URL only; this never claims a specific Discogs release."""
     if release.barcode:
-        query = normalized_barcode(release.barcode) or release.barcode
+        query = normalize_barcode(release.barcode) or release.barcode
     elif release.catalog_number:
         query = " ".join(part for part in (release.catalog_number, release.label) if part)
     else:
@@ -80,12 +79,12 @@ def _matches(release: Release, *, artist: str | None, title: str | None, barcode
     def includes(value: str | None, query: str | None) -> bool:
         return not query or text(query) in text(value)
 
-    barcode_query = normalized_barcode(barcode) if barcode else None
+    barcode_query = normalize_barcode(barcode) if barcode else None
     catalog_query = catalog_number(catalog) if catalog else ""
     return (
         includes(release.artist, artist)
         and includes(release.title, title)
-        and (not barcode_query or normalized_barcode(release.barcode) == barcode_query)
+        and (not barcode_query or normalize_barcode(release.barcode) == barcode_query)
         and (not catalog_query or catalog_query in catalog_number(release.catalog_number))
         and includes(release.label, label)
         and (year is None or release.release_year == year)

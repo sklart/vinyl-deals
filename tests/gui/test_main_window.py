@@ -215,3 +215,19 @@ def test_stale_discogs_generation_cannot_replace_newer_results(qapp, tmp_path):
     assert window.results == [newest]
     assert window._discogs_pending is None
     window.close()
+
+
+def test_gui_uses_human_store_labels_and_keeps_possible_out_of_discogs_column(qapp, tmp_path):
+    item = ReleaseSearchResult(
+        7, "Pink Floyd", "Wish You Were Here", None, None, None, None, "LP", (),
+        None, None, None, "https://www.discogs.com/search/?q=wish+you+were+here&type=all",
+        has_possible_matches=True,
+    )
+    window = MainWindow(tmp_path / "labels.sqlite3", search_service=lambda *_args, **_kwargs: [item])
+    window.perform_search()
+    assert window.release_table.item(0, 13).text() == "Требует проверки"
+    assert "possible" not in window.release_table.item(0, 14).text().casefold()
+    report = LiveStoreResult("tishina", StoreState.ACTIVE, 0)
+    window._live_store_finished(report)
+    assert "Тишина: 0 результатов" in window.status_label.text()
+    window.close()

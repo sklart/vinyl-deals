@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 
 from vinyl_deals.adapters.public_html import PublicHtmlVinylAdapter
-from vinyl_deals.domain import Availability, StoreSearchQuery
+from vinyl_deals.domain import Availability, RawOffer, StoreSearchQuery
 
 
 class _Adapter(PublicHtmlVinylAdapter):
@@ -66,3 +66,12 @@ def test_unconfigured_html_adapter_refuses_unverified_generic_search():
 
 def test_captcha_script_on_a_normal_bitrix_page_is_not_treated_as_a_block() -> None:
     assert not PublicHtmlVinylAdapter._is_blocked('<script src="/captcha/widget.js"></script><main>Каталог</main>')
+
+
+def test_live_search_ranks_exact_title_before_substring():
+    adapter = _Adapter()
+    offers = [
+        RawOffer.now(source="fixture", source_product_id="space", url="https://shop.example/space", artist_raw="Flower Kings", title_raw="Space Revolver"),
+        RawOffer.now(source="fixture", source_product_id="beatles", url="https://shop.example/beatles", artist_raw="Beatles", title_raw="Revolver"),
+    ]
+    assert [item.source_product_id for item in adapter._matching_search_cards(offers, StoreSearchQuery(title="Revolver"))] == ["beatles", "space"]

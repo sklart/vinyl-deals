@@ -12,7 +12,8 @@ from vinyl_deals.adapters.imagine_club import ImagineClubAdapter
 from vinyl_deals.adapters.wave2 import MaximumVinylAdapter
 from vinyl_deals.domain import Availability, RawOffer, StoreSearchQuery, StoreSearchResult, StoreState
 from vinyl_deals.database.repository import SQLiteRepository
-from vinyl_deals.live_search import live_search
+from vinyl_deals.live_search import LiveStoreResult, _rank_live_offers, live_search
+from vinyl_deals.matching.normalize import normalize_barcode
 from vinyl_deals.pricing import DealClass, evaluate_offer, median_price
 
 
@@ -55,6 +56,25 @@ def test_live_search_runs_stores_in_parallel_persists_and_matches(tmp_path):
     assert len(repository.price_history(1)) == 1
 
 
+def test_live_statuses_explain_why_a_store_has_no_results():
+    assert LiveStoreResult("one", StoreState.ACTIVE, 6).status_kind == "found"
+    assert LiveStoreResult("one", StoreState.ACTIVE, 0).status_kind == "empty"
+    assert LiveStoreResult("one", StoreState.DEGRADED, 4, cached=True).status_kind == "cached"
+    assert LiveStoreResult("one", StoreState.DEGRADED, 0, warnings=("no verified live-search endpoint",)).status_kind == "unsupported"
+    assert LiveStoreResult("one", StoreState.DEGRADED, 0, errors=("HTTP 403 CAPTCHA",)).status_kind == "restricted"
+    assert LiveStoreResult("one", StoreState.DEGRADED, 0, errors=("live search timed out",)).status_kind == "timeout"
+    assert LiveStoreResult("one", StoreState.DEGRADED, 0, errors=("network error",)).status_kind == "error"
+
+
+def test_live_ranking_happens_before_detail_enrichment_limit():
+    broad = offer("one", "broad", 1000)
+    broad = replace(broad, artist_raw="Space", title_raw="Space Revolver")
+    exact = offer("one", "exact", 2000)
+    exact = replace(exact, artist_raw="The Beatles", title_raw="Revolver")
+    ranked = _rank_live_offers((broad, exact), StoreSearchQuery(title="Revolver"))
+    assert [item.source_product_id for item in ranked] == ["exact", "broad"]
+
+
 def test_timeout_and_degraded_store_do_not_hide_partial_results(tmp_path):
     repository = SQLiteRepository(tmp_path / "partial.sqlite3")
     result = live_search(
@@ -93,7 +113,7 @@ def test_identifier_query_keeps_listing_without_id_when_detail_confirms_barcode(
         adapter_factories={"detail": lambda: DetailAdapter("detail", (listing,))},
     )
     assert result.stores[0].offers == 1
-    assert result.releases and result.releases[0].barcode == "4006381333931"
+    assert result.releases and result.releases[0].barcode == normalize_barcode("4006381333931")
 
 
 def test_identifier_query_rejects_listing_when_detail_disagrees_on_barcode(tmp_path):
@@ -137,7 +157,7 @@ def test_live_search_groups_pressings_and_exposes_best_price_and_live_deal(tmp_p
         },
     )
     assert len(result.releases) == 2
-    primary = next(item for item in result.releases if item.barcode == "4006381333931")
+    primary = next(item for item in result.releases if item.barcode == normalize_barcode("4006381333931"))
     assert primary.lowest_price_offer and primary.lowest_price_offer.price == Decimal("3000")
     target = next(item for item in primary.offers if item.store == "target")
     assert target.deal_class == DealClass.VERY_HOT
@@ -242,7 +262,7 @@ def test_live_search_uses_multiple_verified_production_adapters_without_catalogu
     # The second Maximum Vinyl result is a different pressing and remains a
     # distinct Release even though the live-search responses share a title.
     assert len(repository.releases_for_search()) == 2
-    pressing = next(item for item in result.releases if item.barcode == "4006381333931")
+    pressing = next(item for item in result.releases if item.barcode == normalize_barcode("4006381333931"))
     assert {offer.store for offer in pressing.offers} == {"vinyl_ru", "maximum_vinyl", "imagine_club", "collectomania"}
     assert pressing.lowest_price_offer is not None
     target = pressing.lowest_price_offer
@@ -284,6 +304,6 @@ def test_live_search_uses_real_product_enrichment_for_production_adapters(tmp_pa
 
     assert {store.source: store.offers for store in result.stores} == {"imagine_club": 1, "drhead": 1}
     persisted = {offer.source: offer for _, offer in repository.offers_for_matching()}
-    assert persisted["imagine_club"].barcode == "602537529049"
+    assert persisted["imagine_club"].barcode == normalize_barcode("602537529049")
     assert persisted["imagine_club"].raw_data["detail_fields"]["лейбл"] == "Universal"
     assert persisted["drhead"].raw_data["public_card"] is True

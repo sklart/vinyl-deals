@@ -9,10 +9,8 @@ from typing import Callable
 
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.domain import RawOffer, StoreSearchQuery, StoreSearchResult, StoreState
-from vinyl_deals.matching import MatchKind, match_offers
 from vinyl_deals.matching.normalize import catalog_number, normalize_barcode, text
 from vinyl_deals.matching.service import build_match_queue
-from vinyl_deals.database.repository import ReleaseMergeConflict
 from vinyl_deals.search import ReleaseSearchResult, search_releases
 from vinyl_deals.updates import DEFAULT_ADAPTER_FACTORIES, STORE_LABELS
 
@@ -27,6 +25,26 @@ class LiveStoreResult:
     cached: bool = False
     releases: tuple[ReleaseSearchResult, ...] = ()
 
+    @property
+    def status_kind(self) -> str:
+        """Human-facing outcome; StoreState remains the persistence contract."""
+        if self.cached:
+            return "cached"
+        if self.state == StoreState.ACTIVE:
+            return "found" if self.offers else "empty"
+        detail = " ".join((*self.warnings, *self.errors)).casefold()
+        if "timed out" in detail or "timeout" in detail:
+            return "timeout"
+        if "no verified" in detail or "no live-search" in detail:
+            return "unsupported"
+        if any(marker in detail for marker in ("403", "429", "captcha", "access-check", "access-restricted")):
+            return "restricted"
+        return "error"
+
+    @property
+    def detail(self) -> str:
+        return "; ".join((*self.warnings, *self.errors))
+
 
 @dataclass(frozen=True, slots=True)
 class LiveSearchResult:
@@ -39,37 +57,6 @@ class LiveSearchResult:
 ProgressCallback = Callable[[LiveStoreResult], None]
 
 
-def _consolidate_compatible_live_offers(
-    repository: SQLiteRepository, offer_ids: list[int]
-) -> None:
-    """Join incomplete live cards only when their identity has no conflict.
-
-    The normal matcher keeps artist/title-only pairs as ``POSSIBLE`` so a
-    catalogue crawl never silently joins editions with sparse shop metadata.
-    In one targeted live search, however, two cards with the *same normalized*
-    artist and title and no known physical/edition conflict are the useful
-    provisional representation of one pressing.  Detail enrichment or Discogs
-    can still later split a cluster when a real conflicting identifier arrives.
-    """
-    wanted = set(offer_ids)
-    candidates = [item for item in repository.offers_for_matching() if item[0] in wanted]
-    for index, (left_id, left) in enumerate(candidates):
-        for right_id, right in candidates[index + 1 :]:
-            if left.source == right.source:
-                continue
-            if text(left.artist_raw) != text(right.artist_raw) or text(left.title_raw) != text(right.title_raw):
-                continue
-            result = match_offers(left, right)
-            if result.kind != MatchKind.POSSIBLE or result.blocking_conflicts:
-                continue
-            try:
-                repository.create_release_for_pair(left_id, right_id, left, right)
-            except ReleaseMergeConflict:
-                # A cluster may already contain an independently discovered
-                # incompatible pressing.  Keep that ambiguity separate.
-                continue
-
-
 def _materialize(repository: SQLiteRepository, discovered: list[RawOffer], query: StoreSearchQuery) -> tuple[ReleaseSearchResult, ...]:
     """Persist a completed batch and expose its grouping immediately."""
     unique = {(offer.source, offer.source_product_id): offer for offer in discovered}
@@ -78,7 +65,6 @@ def _materialize(repository: SQLiteRepository, discovered: list[RawOffer], query
     build_match_queue(repository)
     searched_ids = [offer_id for offer_id, offer in repository.offers_for_matching() if (offer.source, offer.source_product_id) in unique]
     repository.ensure_releases_for_unmatched_offers(searched_ids)
-    _consolidate_compatible_live_offers(repository, searched_ids)
     releases = search_releases(repository, artist=query.artist, title=query.title, barcode=query.barcode, catalog=query.catalog_number, now=datetime.now(timezone.utc))
     return tuple(sorted(releases, key=lambda release: (release.artist.casefold(), release.title.casefold(), release.release_id)))
 
@@ -109,7 +95,10 @@ def _search_store(adapter: object, query: StoreSearchQuery, enrichment_limit: in
         return result
     offers: list[RawOffer] = []
     warnings = list(result.warnings)
-    for offer in result.offers[:enrichment_limit]:
+    # Search engines often put incidental substring hits ahead of the exact
+    # album requested by the user.  Rank before the detail-request limit, so
+    # an exact "Revolver" card is not displaced by "Space Revolver".
+    for offer in _rank_live_offers(result.offers, query)[:enrichment_limit]:
         try:
             # Some adapters parse every detail while searching.  They flag it
             # in raw data, avoiding a duplicate network request.
@@ -118,6 +107,27 @@ def _search_store(adapter: object, query: StoreSearchQuery, enrichment_limit: in
             offers.append(offer)
             warnings.append(f"detail enrichment failed for {offer.source_product_id}: {type(error).__name__}")
     return StoreSearchResult(result.source, tuple(_validated_identifiers(offers, query)), result.state, tuple(warnings), result.errors)
+
+
+def _rank_live_offers(offers: tuple[RawOffer, ...], query: StoreSearchQuery) -> list[RawOffer]:
+    """Put exact artist/title hits ahead of broad text-search matches."""
+    wanted_artist = text(query.artist) if query.artist else ""
+    wanted_title = text(query.title) if query.title else ""
+
+    def rank(offer: RawOffer) -> tuple[int, int, str, str]:
+        artist = text(offer.artist_raw)
+        title = text(offer.title_raw)
+        exact_artist = bool(wanted_artist) and artist == wanted_artist
+        exact_title = bool(wanted_title) and title == wanted_title
+        prefix_title = bool(wanted_title) and title.startswith(wanted_title)
+        return (
+            0 if exact_artist and exact_title else 1 if exact_title else 2 if prefix_title else 3,
+            0 if exact_artist else 1,
+            artist,
+            title,
+        )
+
+    return sorted(offers, key=rank)
 
 
 def _validated_identifiers(offers: list[RawOffer], query: StoreSearchQuery) -> list[RawOffer]:

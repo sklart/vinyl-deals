@@ -61,6 +61,7 @@ class MainWindow(QMainWindow):
         self._worker: UpdateWorker | None = None
         self._live_worker: LiveSearchWorker | None = None
         self._live_store_status: dict[str, str] = {}
+        self._live_store_details: dict[str, str] = {}
         self._alert_worker: TaskWorker | None = None
         self._discogs_worker: TaskWorker | None = None
         self._discogs_pending: tuple[int, tuple[int, ...]] | None = None
@@ -110,7 +111,7 @@ class MainWindow(QMainWindow):
         buttons.addStretch()
         layout.addLayout(buttons)
         splitter = QSplitter(Qt.Orientation.Vertical)
-        self.release_table = self._table(("Исполнитель", "Альбом", "Label", "Catalog", "Год", "Формат", "Barcode", "Лучшая цена", "Лучшая итоговая", "Медиана", "Deal %", "Предложений", "Магазинов", "Discogs"), "release_table")
+        self.release_table = self._table(("Исполнитель", "Альбом", "Label", "Catalog", "Год", "Формат", "Barcode", "Лучшая цена", "Лучшая итоговая", "Медиана", "Deal %", "Предложений", "Магазинов", "Совпадение", "Discogs"), "release_table")
         self.offer_table = self._table(("Магазин", "Цена", "Итоговая цена", "Самовывоз", "Состояние", "Наличие", "Deal %", "Класс"), "offer_table")
         splitter.addWidget(self.release_table)
         offers_panel = QWidget()
@@ -415,8 +416,6 @@ class MainWindow(QMainWindow):
             row = self.release_table.rowCount()
             self.release_table.insertRow(row)
             discogs = result.discogs_confidence or "поиск"
-            if result.has_possible_matches:
-                discogs += " · possible"
             values = self._release_row_values(result, discogs)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -447,6 +446,7 @@ class MainWindow(QMainWindow):
         self._search_performed = True
         self._search_generation += 1
         self._live_store_status = {}
+        self._live_store_details = {}
         self._set_updating(True)
         self.status_label.setText("Поиск во всех магазинах...")
         worker = LiveSearchWorker(self.repository, query, self.live_search_service)
@@ -461,15 +461,22 @@ class MainWindow(QMainWindow):
         source = str(getattr(result, "source", "магазин"))
         label = STORE_LABELS.get(source, source)
         offers = int(getattr(result, "offers", 0))
-        state = str(getattr(result, "state", "degraded"))
-        cached = bool(getattr(result, "cached", False))
-        marker = f"↻ cached {offers}" if cached else "✓ " + str(offers) if state == "active" else "⚠ DEGRADED"
+        kind = str(getattr(result, "status_kind", "error"))
+        marker = {
+            "found": f"✓ {offers}", "empty": "0 результатов", "cached": f"↻ Кэш {offers}",
+            "unsupported": "ⓘ Нет live-search адаптера", "restricted": "⚠ 403/CAPTCHA",
+            "timeout": "⌛ Таймаут", "error": "✕ Ошибка",
+        }.get(kind, "✕ Ошибка")
         self._live_store_status[source] = f"{label}: {marker}"
+        detail = str(getattr(result, "detail", ""))
+        if detail:
+            self._live_store_details[source] = detail
         releases = tuple(getattr(result, "releases", ()))
         if releases:
             self.results = list(releases)
             self._render_search_results()
         self.status_label.setText("Поиск во всех магазинах:\n" + "\n".join(self._live_store_status.values()))
+        self.status_label.setToolTip("\n".join(f"{STORE_LABELS.get(source, source)}: {detail}" for source, detail in self._live_store_details.items()))
 
     def _live_search_completed(self, result: object) -> None:
         self.results = list(getattr(result, "releases", ()))
@@ -578,7 +585,9 @@ class MainWindow(QMainWindow):
             effective = f"{offer.effective_price} RUB" if offer.effective_price_known and offer.effective_price is not None else "?"
             pickup = "Да" if offer.pickup_available else "Нет"
             discount = f"{offer.discount_pct:.0f}%" if offer.discount_pct is not None else "-"
-            values = (store, f"{offer.price} RUB" if offer.price is not None else "-", effective, pickup, offer.condition or "UNKNOWN", availability, discount, offer.deal_class.value if offer.deal_class else "-")
+            condition = "Неизвестно" if not offer.condition or offer.condition.upper() == "UNKNOWN" else offer.condition
+            deal_class = "Недостаточно данных" if offer.deal_class and offer.deal_class.value == "INSUFFICIENT" else offer.deal_class.value if offer.deal_class else "—"
+            values = (store, f"{offer.price} RUB" if offer.price is not None else "-", effective, pickup, condition, availability, discount, deal_class)
             names = highlights.get(offer.offer_id, [])
             color = QColor("#fff3bf") if "Lowest price" in names else QColor("#d3f9d8") if "Best effective" in names or "Best new" in names else QColor("#d0ebff")
             for column, value in enumerate(values):
@@ -607,7 +616,9 @@ class MainWindow(QMainWindow):
             self._money(result.best_effective_offer.effective_price if result.best_effective_offer and result.best_effective_offer.effective_price_known else None),
             self._money(result.market_median),
             f"{result.discount_pct:.1f}%" if result.discount_pct is not None else "—",
-            str(result.offer_count), str(result.store_count), discogs_value,
+            str(result.offer_count), str(result.store_count),
+            "Требует проверки" if result.has_possible_matches else "Подтверждено",
+            discogs_value,
         )
 
     def _summary_text(self, result: ReleaseSearchResult) -> str:

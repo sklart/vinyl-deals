@@ -23,4 +23,4 @@ def test_search_command_prints_release_offers_and_discogs(tmp_path, monkeypatch,
     assert "Best new: imagine — 5490 RUB" in output
     assert "Best used: unavailable" in output
     assert "collectomania" in output
-    assert "Discogs: https://www.discogs.com/search/?q=4006381333931&type=all" in output
+    assert "Discogs: https://www.discogs.com/search/?q=04006381333931&type=all" in output
