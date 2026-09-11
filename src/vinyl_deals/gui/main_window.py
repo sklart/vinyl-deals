@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -97,10 +98,12 @@ class MainWindow(QMainWindow):
         self.refresh_button = QPushButton("Обновить данные")
         self.open_store_button = QPushButton("Открыть магазин")
         self.open_discogs_button = QPushButton("Открыть Discogs")
+        self.confirm_discogs_button = QPushButton("Подтвердить Discogs")
         self.about_button = QPushButton("О программе")
         self.open_store_button.setEnabled(False)
         self.open_discogs_button.setEnabled(False)
-        for button in (self.search_button, self.clear_button, self.refresh_button, self.open_store_button, self.open_discogs_button, self.about_button):
+        self.confirm_discogs_button.setEnabled(False)
+        for button in (self.search_button, self.clear_button, self.refresh_button, self.open_store_button, self.open_discogs_button, self.confirm_discogs_button, self.about_button):
             buttons.addWidget(button)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -127,6 +130,7 @@ class MainWindow(QMainWindow):
         self.offer_table.itemDoubleClicked.connect(lambda _: self.open_selected_offer())
         self.open_store_button.clicked.connect(self.open_selected_offer)
         self.open_discogs_button.clicked.connect(self.open_discogs)
+        self.confirm_discogs_button.clicked.connect(self.confirm_discogs_candidate)
         self.about_button.clicked.connect(self.show_about)
 
     def _build_tracking_page(self) -> QWidget:
@@ -547,6 +551,8 @@ class MainWindow(QMainWindow):
         url = selected[0].data(Qt.ItemDataRole.UserRole) if selected else None
         self.open_store_button.setEnabled(not self._updating and bool(url) and QUrl(str(url)).isValid())
         self.open_discogs_button.setEnabled(not self._updating and bool(self.selected_result and self.selected_result.discogs_url))
+        possible = self.repository.discogs_matches(self.selected_result.release_id) if self.selected_result else []
+        self.confirm_discogs_button.setEnabled(not self._updating and any(row["status"] == "possible" for row in possible))
 
     def _set_updating(self, updating: bool) -> None:
         self._updating = updating
@@ -558,7 +564,7 @@ class MainWindow(QMainWindow):
             self._resume_scheduler_timer = False
         for field in self.fields.values():
             field.setEnabled(not updating)
-        for control in (self.search_button, self.clear_button, self.refresh_button, self.release_table, self.offer_table):
+        for control in (self.search_button, self.clear_button, self.refresh_button, self.release_table, self.offer_table, self.confirm_discogs_button):
             control.setEnabled(not updating)
         for control in (self.watch_add_button, self.watch_remove_button, self.watch_enable_button, self.watch_edit_button, self.watch_open_button, self.watch_table, self.scheduler_enabled, self.scheduler_interval, self.scheduler_auto_send, self.autostart_enabled, self.scheduler_run_button, self.alert_table, self.alert_open_store_button, self.alert_open_discogs_button, self.alert_send_button):
             control.setEnabled(not updating)
@@ -572,6 +578,18 @@ class MainWindow(QMainWindow):
     def open_discogs(self) -> None:
         if self.selected_result and self.selected_result.discogs_url:
             self.url_opener(QUrl(self.selected_result.discogs_url))
+
+    def confirm_discogs_candidate(self) -> None:
+        if not self.selected_result:
+            return
+        choices = [row for row in self.repository.discogs_matches(self.selected_result.release_id) if row["status"] == "possible"]
+        labels = [f"{row['discogs_release_id']} — {row['confidence']} ({row['match_kind']})" for row in choices]
+        selected, accepted = QInputDialog.getItem(self, "Подтвердить Discogs", "Конкретный релиз:", labels, 0, False)
+        if not accepted:
+            return
+        index = labels.index(selected)
+        self.repository.confirm_discogs_match(self.selected_result.release_id, int(choices[index]["discogs_release_id"]))
+        self.perform_search()
 
     def start_refresh(self) -> None:
         if self._maintenance_busy():
