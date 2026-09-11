@@ -208,14 +208,14 @@ class SQLiteRepository:
         """Return canonical Release metadata for the search service."""
         self.initialize()
         with self._connect() as connection:
-            rows = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format, country, disc_count FROM releases ORDER BY artist, title, id").fetchall()
-        return [Release(*row) for row in rows]
+            rows = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format, country, disc_count, vinyl_size, rpm, vinyl_color, edition_tags FROM releases ORDER BY artist, title, id").fetchall()
+        return [Release(*row[:13], tuple(json.loads(row[13] or '[]'))) for row in rows]
 
     def release_by_id(self, release_id: int) -> Release | None:
         self.initialize()
         with self._connect() as connection:
-            row = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format, country, disc_count FROM releases WHERE id=?", (release_id,)).fetchone()
-        return Release(*row) if row else None
+            row = connection.execute("SELECT id, artist, title, barcode, label, catalog_number, release_year, format, country, disc_count, vinyl_size, rpm, vinyl_color, edition_tags FROM releases WHERE id=?", (release_id,)).fetchone()
+        return Release(*row[:13], tuple(json.loads(row[13] or '[]'))) if row else None
 
     def discogs_matches(self, release_id: int) -> list[dict[str, object]]:
         """Return Discogs candidates; a confirmed row is authoritative locally."""
@@ -238,6 +238,8 @@ class SQLiteRepository:
                            metadata: dict[str, object]) -> None:
         self.initialize()
         with self._connect() as connection:
+            if status == "confirmed":
+                connection.execute("UPDATE discogs_release_matches SET status='possible' WHERE release_id=? AND status='confirmed' AND discogs_release_id<>?", (release_id, discogs_release_id))
             connection.execute(
                 "INSERT INTO discogs_release_matches(release_id,discogs_release_id,discogs_master_id,discogs_url,confidence,match_kind,status,matched_at,metadata_json) "
                 "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(release_id,discogs_release_id) DO UPDATE SET "

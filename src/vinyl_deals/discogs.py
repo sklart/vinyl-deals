@@ -9,7 +9,7 @@ import hashlib
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Callable
 from urllib.error import HTTPError, URLError
@@ -49,12 +49,18 @@ class DiscogsApiClient:
         self.timeout, self.max_retries = timeout, max_retries
         self._fetch = fetch or self._http_fetch
 
+    @property
+    def available(self) -> bool:
+        return bool(self.token)
+
     def _http_fetch(self, url: str, headers: dict[str, str], timeout: float) -> dict[str, object]:
         request = Request(url, headers=headers)
         with urlopen(request, timeout=timeout) as response:  # noqa: S310 -- official API endpoint
             return json.loads(response.read().decode("utf-8"))
 
     def get(self, path: str, params: dict[str, object] | None = None) -> dict[str, object]:
+        if not self.available:
+            raise PermissionError("Discogs token is not configured")
         query = urlencode({key: value for key, value in (params or {}).items() if value not in (None, "")})
         url = f"{self.base_url}{path}" + (f"?{query}" if query else "")
         headers = {"User-Agent": "VinylDeals/0.1 (+https://github.com/sklart/vinyl-deals)", "Accept": "application/json"}
@@ -100,8 +106,10 @@ def _metadata(payload: dict[str, object]) -> dict[str, object]:
         "catalog_number": catalog,
         "release_year": int(str(payload["year"])) if str(payload.get("year", "")).isdigit() else None,
         "country": payload.get("country") or None,
-        "format": _first(formats),
+        "format": ", ".join(part for part in (_first(formats), *descriptions) if part) or None,
         "disc_count": quantity or None,
+        "vinyl_size": next((value for value in descriptions if value in {'7\"', '10\"', '12\"'}), None),
+        "rpm": next((int(value.split()[0]) for value in descriptions if value.casefold().endswith("rpm") and value.split()[0].isdigit()), None),
         "vinyl_color": next((value for value in descriptions if "color" in value.casefold() or "colour" in value.casefold()), None),
         "edition_tags": descriptions,
         "artist": _first(payload.get("artists")),
@@ -110,6 +118,23 @@ def _metadata(payload: dict[str, object]) -> dict[str, object]:
 
 
 def _classify(release: Release, metadata: dict[str, object]) -> tuple[DiscogsConfidence, str]:
+    remote_artist, remote_title = text(str(metadata.get("artist") or "")), text(str(metadata.get("title") or ""))
+    if remote_artist and remote_artist != text(release.artist) or remote_title and remote_title != text(release.title):
+        return DiscogsConfidence.DIFFERENT, "artist_title_conflict"
+    def conflict(local: object, remote: object, *, contains: bool = False) -> bool:
+        if local in (None, "", (), []) or remote in (None, "", (), []):
+            return False
+        left, right = text(str(local)), text(str(remote))
+        return left not in right and right not in left if contains else left != right
+    physical_conflicts = (
+        conflict(release.format, metadata.get("format"), contains=True),
+        conflict(release.disc_count, metadata.get("disc_count")),
+        conflict(release.vinyl_size, metadata.get("vinyl_size")),
+        conflict(release.rpm, metadata.get("rpm")),
+        conflict(release.vinyl_color, metadata.get("vinyl_color")),
+    )
+    if any(physical_conflicts):
+        return DiscogsConfidence.DIFFERENT, "physical_conflict"
     local_barcode, remote_barcode = digits(release.barcode), digits(str(metadata.get("barcode") or ""))
     if local_barcode and remote_barcode:
         return (DiscogsConfidence.EXACT, "barcode") if local_barcode == remote_barcode else (DiscogsConfidence.DIFFERENT, "barcode_conflict")
@@ -119,9 +144,7 @@ def _classify(release: Release, metadata: dict[str, object]) -> tuple[DiscogsCon
         if local_catalog != remote_catalog:
             return DiscogsConfidence.DIFFERENT, "catalog_conflict"
         return (DiscogsConfidence.HIGH if labels_match else DiscogsConfidence.POSSIBLE, "catalog_and_label" if labels_match else "catalog")
-    artist_title = text(release.artist) == text(str(metadata.get("artist") or "")) and text(release.title) == text(str(metadata.get("title") or ""))
-    if not artist_title:
-        return DiscogsConfidence.DIFFERENT, "artist_title_conflict"
+    artist_title = bool(remote_artist and remote_title)
     corroboration = sum((release.release_year is not None and release.release_year == metadata.get("release_year"), bool(release.format and metadata.get("format") and text(release.format) in text(str(metadata["format"]))),))
     return (DiscogsConfidence.HIGH, "artist_title_metadata") if corroboration else (DiscogsConfidence.POSSIBLE, "artist_title")
 
@@ -129,6 +152,10 @@ def _classify(release: Release, metadata: dict[str, object]) -> tuple[DiscogsCon
 class DiscogsService:
     def __init__(self, repository: SQLiteRepository, client: DiscogsApiClient) -> None:
         self.repository, self.client = repository, client
+
+    @property
+    def enabled(self) -> bool:
+        return self.client.available
 
     @staticmethod
     def _key(path: str, params: dict[str, object] | None = None) -> str:
@@ -153,6 +180,8 @@ class DiscogsService:
         return queries
 
     def enrich_release(self, release_id: int) -> list[DiscogsCandidate]:
+        if not self.enabled:
+            return []
         release = self.repository.release_by_id(release_id)
         if not release:
             return []
@@ -161,21 +190,27 @@ class DiscogsService:
         if self.repository.confirmed_discogs_match(release_id):
             return []
         candidates: dict[int, DiscogsCandidate] = {}
-        try:
-            for query in self._queries(release):
+        for query in self._queries(release):
+            try:
                 search = self._get("/database/search", query)
                 for item in list(search.get("results", []))[:10]:
                     if not isinstance(item, dict) or not item.get("id"):
                         continue
-                    detail = self._get(f"/releases/{int(item['id'])}")
+                    try:
+                        detail = self._get(f"/releases/{int(item['id'])}")
+                    except (HTTPError, URLError, TimeoutError, ValueError, PermissionError):
+                        continue
                     meta = _metadata(detail)
                     confidence, kind = _classify(release, meta)
                     candidate = DiscogsCandidate(int(item["id"]), int(detail["master_id"]) if str(detail.get("master_id", "")).isdigit() else None, f"https://www.discogs.com/release/{int(item['id'])}", confidence, kind, meta)
                     previous = candidates.get(candidate.release_id)
                     if previous is None or list(DiscogsConfidence).index(candidate.confidence) < list(DiscogsConfidence).index(previous.confidence):
                         candidates[candidate.release_id] = candidate
-        except (HTTPError, URLError, TimeoutError, ValueError):
-            return list(candidates.values())
+            except (HTTPError, URLError, TimeoutError, ValueError, PermissionError):
+                continue
+        strong = [candidate for candidate in candidates.values() if candidate.confidence in {DiscogsConfidence.EXACT, DiscogsConfidence.HIGH}]
+        if len(strong) > 1:
+            candidates = {candidate.release_id: replace(candidate, confidence=DiscogsConfidence.POSSIBLE, match_kind="ambiguous_strong_match") if candidate in strong else candidate for candidate in candidates.values()}
         for candidate in candidates.values():
             status = "confirmed" if candidate.confidence in {DiscogsConfidence.EXACT, DiscogsConfidence.HIGH} else "possible" if candidate.confidence == DiscogsConfidence.POSSIBLE else "different"
             self.repository.save_discogs_match(release_id, discogs_release_id=candidate.release_id, discogs_master_id=candidate.master_id, discogs_url=candidate.url, confidence=candidate.confidence.value, match_kind=candidate.match_kind, status=status, metadata=candidate.metadata)

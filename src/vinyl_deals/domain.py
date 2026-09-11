@@ -51,6 +51,10 @@ class Release:
     format: str | None = None
     country: str | None = None
     disc_count: int | None = None
+    vinyl_size: str | None = None
+    rpm: int | None = None
+    vinyl_color: str | None = None
+    edition_tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

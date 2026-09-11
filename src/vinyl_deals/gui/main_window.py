@@ -63,7 +63,9 @@ class MainWindow(QMainWindow):
         self._live_store_status: dict[str, str] = {}
         self._alert_worker: TaskWorker | None = None
         self._discogs_worker: TaskWorker | None = None
-        self.discogs_service_factory = discogs_service_factory or (lambda repository: DiscogsService(repository, DiscogsApiClient()))
+        self._discogs_pending: tuple[int, tuple[int, ...]] | None = None
+        self._search_generation = 0
+        self.discogs_service_factory = discogs_service_factory or (lambda repository: DiscogsService(repository, DiscogsApiClient(token=str(self.settings.value("discogs/token", "") or "") or None)))
         self._search_performed = False
         self._updating = False
         self._closing = False
@@ -431,6 +433,7 @@ class MainWindow(QMainWindow):
         if self._maintenance_busy():
             return
         self._search_performed = True
+        self._search_generation += 1
         self._live_store_status = {}
         self._set_updating(True)
         self.status_label.setText("Поиск во всех магазинах...")
@@ -466,15 +469,28 @@ class MainWindow(QMainWindow):
 
     def _start_discogs_enrichment(self, release_ids: tuple[int, ...]) -> None:
         """Store prices remain visible while the optional API work happens later."""
-        if not release_ids or self._closing or (self._discogs_worker and self._discogs_worker.isRunning()):
+        if not release_ids or self._closing:
             return
+        generation = self._search_generation
+        if self._discogs_worker and self._discogs_worker.isRunning():
+            self._discogs_pending = (generation, release_ids)
+            return
+        self._launch_discogs_worker(generation, release_ids)
+
+    def _launch_discogs_worker(self, generation: int, release_ids: tuple[int, ...]) -> None:
         service = self.discogs_service_factory(self.repository)
-        self._discogs_worker = TaskWorker(lambda: [service.enrich_release(release_id) for release_id in release_ids])
+        if not service.enabled:
+            self.status_label.setText(f"Найдено релизов: {len(self.results)}. Discogs: настройте DISCOGS_TOKEN или discogs/token в data/settings.ini.")
+            return
+        self._discogs_worker = TaskWorker(lambda: (generation, [service.enrich_release(release_id) for release_id in release_ids]))
         self._discogs_worker.completed.connect(self._discogs_completed)
         self._discogs_worker.finished.connect(self._discogs_finished)
         self._discogs_worker.start()
 
-    def _discogs_completed(self, _result: object) -> None:
+    def _discogs_completed(self, result: object) -> None:
+        generation = result[0] if isinstance(result, tuple) else -1
+        if generation != self._search_generation:
+            return
         criteria = self._criteria()
         if criteria is not None:
             refreshed = self.search_service(self.repository, **criteria)
@@ -490,6 +506,10 @@ class MainWindow(QMainWindow):
         self._discogs_worker = None
         if worker:
             worker.deleteLater()
+        pending = self._discogs_pending
+        self._discogs_pending = None
+        if pending and not self._closing:
+            self._launch_discogs_worker(*pending)
 
     def _live_search_failed(self, message: str) -> None:
         self.status_label.setText(f"Ошибка live-поиска: {message}")
@@ -591,7 +611,14 @@ class MainWindow(QMainWindow):
         if not self.selected_result:
             return
         choices = [row for row in self.repository.discogs_matches(self.selected_result.release_id) if row["status"] == "possible"]
-        labels = [f"{row['discogs_release_id']} — {row['confidence']} ({row['match_kind']})" for row in choices]
+        labels = [
+            "#{} — {} — {} / {} / {} / {} / {}".format(
+                row["discogs_release_id"], row["metadata"].get("artist", "?"), row["metadata"].get("title", "?"),
+                row["metadata"].get("release_year", "?"), row["metadata"].get("country", "?"),
+                row["metadata"].get("label", "?"), row["metadata"].get("catalog_number", "?"),
+            )
+            for row in choices
+        ]
         selected, accepted = QInputDialog.getItem(self, "Подтвердить Discogs", "Конкретный релиз:", labels, 0, False)
         if not accepted:
             return

@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-CURRENT_VERSION = 5
+CURRENT_VERSION = 6
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS raw_products (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_product_id TEXT NOT NULL, fetched_at TEXT NOT NULL, payload_json TEXT NOT NULL, UNIQUE(source, source_product_id));
@@ -163,6 +163,10 @@ def migrate_v5(connection: sqlite3.Connection) -> None:
     """)
 
 
+def migrate_v6(connection: sqlite3.Connection) -> None:
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_discogs_one_confirmed_per_release ON discogs_release_matches(release_id) WHERE status='confirmed'")
+
+
 def migrate(connection: sqlite3.Connection) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version > CURRENT_VERSION:
@@ -186,3 +190,7 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 5:
         migrate_v5(connection)
         connection.execute("PRAGMA user_version = 5")
+        version = 5
+    if version < 6:
+        migrate_v6(connection)
+        connection.execute("PRAGMA user_version = 6")
