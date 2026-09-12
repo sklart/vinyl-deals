@@ -73,6 +73,19 @@ def test_good_deal_uses_existing_pricing_engine(tmp_path):
     assert "Выгода:" in format_alert(persisted)
 
 
+def test_alert_uses_confirmed_discogs_release_url(tmp_path):
+    repository, release_id = _repository(tmp_path)
+    repository.add_watchlist(release_id)
+    repository.save_discogs_match(
+        release_id, discogs_release_id=42, discogs_master_id=None,
+        discogs_url="https://www.discogs.com/release/42", confidence="EXACT",
+        match_kind="barcode", status="confirmed", metadata={},
+    )
+    alerts = evaluate_watchlist(repository)
+    assert alerts
+    assert all(item.payload["discogs_url"] == "https://www.discogs.com/release/42" for item in alerts)
+
+
 @pytest.mark.parametrize(("selected", "deal", "expected"), [
     (None, "INTERESTING", False), (None, "GOOD", True),
     ("NORMAL", "NORMAL", True), ("INTERESTING", "INTERESTING", True),

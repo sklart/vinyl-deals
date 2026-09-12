@@ -371,19 +371,21 @@ class SQLiteRepository:
         self.initialize()
         where = "WHERE w.enabled=1" if enabled_only else ""
         with self._connect() as connection:
-            rows = connection.execute(f"SELECT w.release_id,w.enabled,w.max_price,w.min_deal_class,w.local_only,w.city,w.pickup_only,w.created_at,w.updated_at,w.last_checked_at,w.last_check_status,w.last_offer_count,r.artist,r.title FROM watchlist w JOIN releases r ON r.id=w.release_id {where} ORDER BY r.artist,r.title").fetchall()
-        keys = ("release_id", "enabled", "max_price", "min_deal_class", "local_only", "city", "pickup_only", "created_at", "updated_at", "last_checked_at", "last_check_status", "last_offer_count", "artist", "title")
+            rows = connection.execute(f"SELECT w.release_id,w.enabled,w.max_price,w.min_deal_class,w.local_only,w.city,w.pickup_only,w.created_at,w.updated_at,w.last_checked_at,w.last_check_status,w.last_offer_count,w.last_fresh_offer_count,w.last_cached_offer_count,r.artist,r.title FROM watchlist w JOIN releases r ON r.id=w.release_id {where} ORDER BY r.artist,r.title").fetchall()
+        keys = ("release_id", "enabled", "max_price", "min_deal_class", "local_only", "city", "pickup_only", "created_at", "updated_at", "last_checked_at", "last_check_status", "last_offer_count", "last_fresh_offer_count", "last_cached_offer_count", "artist", "title")
         return [dict(zip(keys, row, strict=True)) for row in rows]
 
-    def record_watch_refresh(self, release_id: int, *, status: str, offer_count: int, checked_at: str | None = None) -> None:
+    def record_watch_refresh(self, release_id: int, *, status: str, offer_count: int,
+                             fresh_offer_count: int = 0, cached_offer_count: int = 0,
+                             checked_at: str | None = None) -> None:
         """Record a targeted watch check without touching alert deduplication."""
         if status not in {"OK", "PARTIAL", "NO_RESULTS", "ERROR"}:
             raise ValueError("unsupported watch refresh status")
         self.initialize()
         with self._connect() as connection:
             cursor = connection.execute(
-                "UPDATE watchlist SET last_checked_at=?, last_check_status=?, last_offer_count=? WHERE release_id=?",
-                (checked_at or _utc_now(), status, max(0, offer_count), release_id),
+                "UPDATE watchlist SET last_checked_at=?, last_check_status=?, last_offer_count=?, last_fresh_offer_count=?, last_cached_offer_count=? WHERE release_id=?",
+                (checked_at or _utc_now(), status, max(0, offer_count), max(0, fresh_offer_count), max(0, cached_offer_count), release_id),
             )
             if not cursor.rowcount:
                 raise ValueError(f"Release {release_id} is not in watchlist")

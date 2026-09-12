@@ -196,7 +196,9 @@ def test_live_search_reports_store_progress_and_renders_partial_result(qapp, tmp
     window.fields["title"].setText("Blackwater Park")
     window.start_live_search()
     assert wait_until(qapp, started.is_set)
-    assert "Imagine Club: ✓ 3" in window.status_label.text()
+    # ``started`` is a thread Event; the Qt progress signal is queued back to
+    # the GUI thread and must be observed through its actual UI effect.
+    assert wait_until(qapp, lambda: "Imagine Club: ✓ 3" in window.status_label.text())
     assert not window.search_button.isEnabled()
     assert window.release_table.rowCount() == 1
     release_worker.set()

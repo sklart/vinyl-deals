@@ -46,10 +46,13 @@ class StoreSearchQuery:
     barcode: str | None = None
     catalog_number: str | None = None
     label: str | None = None
+    # A fallback may deliberately use a broader public search term while
+    # retaining every strong identifier for post-enrichment validation.
+    search_text: str | None = None
 
     def text(self) -> str:
         """Prefer identifiers; otherwise provide a compact human query."""
-        return self.barcode or " ".join(value for value in (self.catalog_number, self.label) if value) or " ".join(value for value in (self.artist, self.title) if value)
+        return self.search_text or self.barcode or " ".join(value for value in (self.catalog_number, self.label) if value) or " ".join(value for value in (self.artist, self.title) if value)
 
     def is_empty(self) -> bool:
         return not bool(self.text().strip())

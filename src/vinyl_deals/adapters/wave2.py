@@ -5,6 +5,7 @@ import re
 from dataclasses import replace
 
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 
 from vinyl_deals.adapters.public_html import PublicHtmlVinylAdapter
 from vinyl_deals.domain import ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
@@ -152,9 +153,32 @@ class AVSoundAdapter(PublicHtmlVinylAdapter):
 
 class OnlineTradeAdapter(PublicHtmlVinylAdapter):
     source, store_name = "onlinetrade", "OnlineTrade"
-    targeted_search_reason = "OnlineTrade has no verified public targeted-search endpoint."
     catalog_url, base_url = "https://www.onlinetrade.ru/catalogue/vinilovye_plastinki_cd_blu_ray_kassety-c3594/", "https://www.onlinetrade.ru"
     default_condition_media = "NEW"
+
+    def search_offers(self, query: StoreSearchQuery) -> StoreSearchResult:
+        """Audit the public storefront search without attempting its challenge.
+
+        OnlineTrade currently responds with a Servicepipe JS challenge to the
+        ordinary public search URL.  Recording this as RESTRICTED is more
+        truthful than claiming an unsupported endpoint, and deliberately
+        stops before any challenge script is executed.
+        """
+        url = f"{self.base_url}/sitesearch.html?{urlencode({'query': query.text()})}"
+        try:
+            html = self._fetch(url)
+        except (HTTPError, URLError, OSError) as error:
+            code = getattr(error, "code", None)
+            return StoreSearchResult(
+                self.source, (), StoreState.DEGRADED,
+                (f"OnlineTrade public search unavailable ({'HTTP ' + str(code) if code else type(error).__name__}).",),
+                status=StoreSearchStatus.RESTRICTED if code in {403, 429} else StoreSearchStatus.ERROR,
+            )
+        if self._is_blocked(html):
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("OnlineTrade returned an access-check challenge; no bypass is attempted.",), status=StoreSearchStatus.RESTRICTED)
+        # A normal result must still pass the strict mixed-media classifier.
+        offers = tuple(item for item in self._matching_search_cards(self.parse_listing(html), query) if self._looks_like_vinyl(" ".join(filter(None, (item.artist_raw, item.title_raw, item.url)))))
+        return StoreSearchResult(self.source, offers, status=StoreSearchStatus.FOUND if offers else StoreSearchStatus.EMPTY)
 
     @staticmethod
     def _looks_like_vinyl(value: str) -> bool:

@@ -15,6 +15,7 @@ class DroogRostovAdapter(BaseStoreAdapter):
     """
 
     source = "droog_rostov"
+    targeted_search_reason = "«Друг» does not expose a verified public targeted-search endpoint."
     catalog_url = "https://taplink.cc/droog_music"
     city = "Ростов-на-Дону"
 

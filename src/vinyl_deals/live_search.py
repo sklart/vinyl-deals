@@ -50,6 +50,21 @@ class LiveSearchResult:
     releases: tuple[ReleaseSearchResult, ...]
     stores: tuple[LiveStoreResult, ...]
     possible_matches: tuple[tuple[int, int, float, str], ...] = ()
+    fresh_offer_ids: tuple[int, ...] = ()
+    cached_offer_ids: tuple[int, ...] = ()
+
+    @property
+    def fresh_offer_count(self) -> int:
+        # Test/dry-run services may not have persisted IDs. Their structured
+        # store reports still accurately describe whether a query was fresh.
+        return len(self.fresh_offer_ids) or sum(
+            store.offers for store in self.stores
+            if not store.cached and store.status_kind == StoreSearchStatus.FOUND.value
+        )
+
+    @property
+    def cached_offer_count(self) -> int:
+        return len(self.cached_offer_ids) or sum(store.offers for store in self.stores if store.cached)
 
 
 ProgressCallback = Callable[[LiveStoreResult], None]
@@ -185,7 +200,8 @@ def live_search(
             callback(item)
     pending = set(futures)
     reports: dict[str, LiveStoreResult] = {}
-    discovered: list[RawOffer] = []
+    fresh_discovered: list[RawOffer] = []
+    cached_discovered: list[RawOffer] = []
     try:
         while pending and monotonic() - started < global_timeout:
             done, _ = wait(pending, timeout=0.05)
@@ -194,12 +210,12 @@ def live_search(
                 source = futures[future]
                 try:
                     result = future.result()
-                    discovered.extend(result.offers)
+                    fresh_discovered.extend(result.offers)
                     item = LiveStoreResult(source, result.state, len(result.offers), result.warnings, result.errors, status=result.status)
                 except Exception as error:
                     item = LiveStoreResult(source, StoreState.DEGRADED, 0, errors=(f"live search failed: {type(error).__name__}",))
                 if item.state == StoreState.ACTIVE:
-                    item = LiveStoreResult(item.source, item.state, item.offers, item.warnings, item.errors, item.cached, _materialize(repository, discovered, query))
+                    item = LiveStoreResult(item.source, item.state, item.offers, item.warnings, item.errors, item.cached, _materialize(repository, fresh_discovered, query))
                 reports[source] = item
                 callback(item)
             now = monotonic()
@@ -228,16 +244,27 @@ def live_search(
         if item.state == StoreState.DEGRADED:
             cached = _cached_offers(repository, source, query)
             if cached:
-                discovered.extend(cached)
+                cached_discovered.extend(cached)
                 item = LiveStoreResult(source, item.state, len(cached), item.warnings, item.errors, cached=True, status=StoreSearchStatus.CACHED)
                 reports[source] = item
                 callback(item)
-    releases = _materialize(repository, discovered, query)
-    unique = {(offer.source, offer.source_product_id): offer for offer in discovered}
-    searched_ids = [offer_id for offer_id, offer in repository.offers_for_matching() if (offer.source, offer.source_product_id) in unique]
+    releases = _materialize(repository, fresh_discovered, query)
+    fresh_keys = {(offer.source, offer.source_product_id) for offer in fresh_discovered}
+    cached_keys = {(offer.source, offer.source_product_id) for offer in cached_discovered} - fresh_keys
+    found_ids = {
+        (offer.source, offer.source_product_id): offer_id
+        for offer_id, offer in repository.offers_for_matching()
+    }
+    searched_ids = [offer_id for key, offer_id in found_ids.items() if key in fresh_keys | cached_keys]
+    fresh_ids = tuple(sorted(found_ids[key] for key in fresh_keys if key in found_ids))
+    cached_ids = tuple(sorted(found_ids[key] for key in cached_keys if key in found_ids))
     searched_id_set = set(searched_ids)
     possible = tuple(
         row for row in repository.possible_matches()
         if row[0] in searched_id_set or row[1] in searched_id_set
     )
-    return LiveSearchResult(query, releases, tuple(reports.get(source, LiveStoreResult(source, StoreState.DEGRADED, 0)) for source in factories), possible)
+    return LiveSearchResult(
+        query, releases,
+        tuple(reports.get(source, LiveStoreResult(source, StoreState.DEGRADED, 0)) for source in factories),
+        possible, fresh_ids, cached_ids,
+    )

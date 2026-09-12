@@ -29,6 +29,7 @@ def main() -> int:
         item = watch_commands.add_parser(name); item.add_argument("release_id", type=int)
     alerts = commands.add_parser("alerts", help="Evaluate and deliver watchlist alerts"); alerts.add_argument("--database", type=Path, default=default_database); alert_commands = alerts.add_subparsers(dest="alert_command", required=True); alert_commands.add_parser("check"); alert_commands.add_parser("list"); alert_commands.add_parser("send")
     commands.add_parser("doctor", help="Check local configuration")
+    commands.add_parser("doctor-stores", help="Show public live-search and price coverage without network access")
     repair = commands.add_parser("repair-metadata", help="Normalize legacy metadata and rebuild automatic release matches")
     repair.add_argument("--database", type=Path, default=default_database)
     args = parser.parse_args()
@@ -43,6 +44,12 @@ def main() -> int:
                 print(f"- {store}: {status} ({finished_at or 'running'})")
         diagnostics = repository.integrity_diagnostics()
         print("Integrity: OK." if not diagnostics else "Integrity warnings:\n" + "\n".join(f"- {item}" for item in diagnostics))
+        return 0
+    if args.command == "doctor-stores":
+        from vinyl_deals.store_diagnostics import store_coverage
+        repository = SQLiteRepository(default_database)
+        for row in store_coverage(repository):
+            print(f"{row.label:<18} search: {row.search:<11} price: {row.price:<11} detail: {row.detail_enrichment:<3} last: {row.last_known_status}")
         return 0
     if args.command == "repair-metadata":
         changed = SQLiteRepository(args.database).repair_metadata()

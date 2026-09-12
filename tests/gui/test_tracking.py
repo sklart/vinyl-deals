@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from threading import Event, Timer
+from time import monotonic
 
 from PySide6.QtTest import QSignalSpy, QTest
 
@@ -9,6 +10,18 @@ from vinyl_deals.gui.main_window import MainWindow
 from vinyl_deals.live_search import LiveSearchResult
 from vinyl_deals.matching.service import build_match_queue
 from vinyl_deals.search import search_releases
+
+
+def wait_until(qapp, predicate, *, timeout_seconds: float = 2.0) -> bool:
+    """Wait for a concrete Qt lifecycle/UI condition, not a poll count."""
+    deadline = monotonic() + timeout_seconds
+    while monotonic() < deadline:
+        qapp.processEvents()
+        if predicate():
+            return True
+        QTest.qWait(10)
+    qapp.processEvents()
+    return bool(predicate())
 
 
 def populated_repository(window):
@@ -60,11 +73,12 @@ def test_tracking_shows_targeted_refresh_state(qapp, tmp_path):
     window = MainWindow(tmp_path / "tracking-state.sqlite3", search_service=search_releases)
     release_id = populated_repository(window)
     window.repository.add_watchlist(release_id)
-    window.repository.record_watch_refresh(release_id, status="PARTIAL", offer_count=4, checked_at="2026-09-11T12:00:00+00:00")
+    window.repository.record_watch_refresh(release_id, status="PARTIAL", offer_count=4, fresh_offer_count=3, cached_offer_count=1, checked_at="2026-09-11T12:00:00+00:00")
     window.refresh_tracking()
-    assert window.watch_table.item(0, 9).text() == "2026-09-11T12:00:00+00:00"
-    assert window.watch_table.item(0, 10).text() == "PARTIAL"
-    assert window.watch_table.item(0, 11).text() == "4"
+    assert window.watch_table.item(0, 9).text().startswith("11.09.2026 ")
+    assert window.watch_table.item(0, 10).text() == "Частично"
+    assert window.watch_table.item(0, 11).text() == "3"
+    assert window.watch_table.item(0, 12).text() == "1"
     window.close()
 
 
@@ -98,20 +112,10 @@ def test_scheduler_cycle_keeps_gui_controls_disabled_until_finished(qapp, tmp_pa
     window.repository.add_watchlist(populated_repository(window))
     running_changes = QSignalSpy(window.scheduler.running_changed)
     window.run_scheduler_cycle()
-    for _ in range(50):
-        qapp.processEvents()
-        if started.is_set():
-            break
-        QTest.qWait(10)
-    assert started.is_set()
+    assert wait_until(qapp, started.is_set)
     # ``progress`` crosses threads, so wait for the queued Qt signal rather
     # than assuming it is delivered in the same event-loop turn as `started`.
-    for _ in range(50):
-        qapp.processEvents()
-        if "Проверка 1/1: Opeth — Blackwater Park" in window.status_label.text():
-            break
-        QTest.qWait(10)
-    assert "Проверка 1/1: Opeth — Blackwater Park" in window.status_label.text()
+    assert wait_until(qapp, lambda: "Проверка 1/1: Opeth — Blackwater Park" in window.status_label.text())
     assert not window.search_button.isEnabled()
     assert not window.watch_add_button.isEnabled()
     assert not window.scheduler_run_button.isEnabled()
@@ -119,12 +123,7 @@ def test_scheduler_cycle_keeps_gui_controls_disabled_until_finished(qapp, tmp_pa
     # Wait for the real lifecycle signal (True then False), not an arbitrary
     # UI delay.  Python 3.12 may deliver QThread's finished event a little
     # later than the worker's Python function returns.
-    for _ in range(200):
-        qapp.processEvents()
-        if running_changes.count() >= 2 and not window.scheduler.running:
-            break
-        QTest.qWait(10)
-    assert running_changes.count() >= 2
+    assert wait_until(qapp, lambda: running_changes.count() >= 2 and not window.scheduler.running)
     assert window.search_button.isEnabled()
     assert window.scheduler_run_button.isEnabled()
     window.close()
@@ -199,20 +198,12 @@ def test_scheduler_cycle_blocks_manual_send_and_displays_next_check(qapp, tmp_pa
     window.scheduler_enabled.setChecked(True)
     window.scheduler_interval.setCurrentText("30")
     window.run_scheduler_cycle()
-    for _ in range(50):
-        qapp.processEvents()
-        if started.is_set():
-            break
-        QTest.qWait(10)
+    assert wait_until(qapp, started.is_set)
     window.send_pending_alerts()
     assert window._alert_worker is None
     unblock.set()
-    for _ in range(50):
-        qapp.processEvents()
-        if not window.scheduler.running and "Следующая проверка: через 30 мин." in window.status_label.text():
-            break
-        QTest.qWait(10)
-    assert "Следующая проверка: через 30 мин." in window.status_label.text()
+    assert wait_until(qapp, lambda: not window.scheduler.running)
+    assert wait_until(qapp, lambda: "Следующая проверка: через 30 мин." in window.status_label.text())
     assert window.scheduler.timer.isActive()
     window.close()
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -157,7 +158,7 @@ class MainWindow(QMainWindow):
         self.watch_open_button = QPushButton("Открыть предложения")
         for button in (self.watch_add_button, self.watch_remove_button, self.watch_enable_button, self.watch_edit_button, self.watch_open_button): controls.addWidget(button)
         layout.addLayout(controls)
-        self.watch_table = self._table(("Исполнитель", "Альбом", "Вкл.", "Макс. цена", "Min deal", "Local", "Город", "Самовывоз", "Последний alert", "Последняя проверка", "Статус", "Предложений"), "watch_table")
+        self.watch_table = self._table(("Исполнитель", "Альбом", "Вкл.", "Макс. цена", "Min deal", "Local", "Город", "Самовывоз", "Последний alert", "Последняя проверка", "Статус", "Свежих", "Из кэша"), "watch_table")
         layout.addWidget(self.watch_table, 1)
         scheduler_controls = QHBoxLayout()
         self.scheduler_enabled = QCheckBox("Автопроверка")
@@ -205,7 +206,14 @@ class MainWindow(QMainWindow):
         self.watch_table.setRowCount(0)
         for entry in self.repository.watchlist_entries():
             row = self.watch_table.rowCount(); self.watch_table.insertRow(row)
-            values = (entry["artist"], entry["title"], "Да" if entry["enabled"] else "Нет", entry["max_price"] or "", entry["min_deal_class"] or "GOOD", "Да" if entry["local_only"] else "Нет", entry["city"] or "", "Да" if entry["pickup_only"] else "Нет", self._last_alert_text(int(entry["release_id"])), entry["last_checked_at"] or "—", entry["last_check_status"] or "—", entry["last_offer_count"])
+            checked = entry["last_checked_at"]
+            if checked:
+                try:
+                    checked = datetime.fromisoformat(str(checked)).astimezone().strftime("%d.%m.%Y %H:%M")
+                except ValueError:
+                    pass
+            status = {"OK": "Успешно", "PARTIAL": "Частично", "NO_RESULTS": "Не найдено", "ERROR": "Ошибка"}.get(str(entry["last_check_status"]), entry["last_check_status"] or "—")
+            values = (entry["artist"], entry["title"], "Да" if entry["enabled"] else "Нет", entry["max_price"] or "", entry["min_deal_class"] or "GOOD", "Да" if entry["local_only"] else "Нет", entry["city"] or "", "Да" if entry["pickup_only"] else "Нет", self._last_alert_text(int(entry["release_id"])), checked or "—", status, entry["last_fresh_offer_count"], entry["last_cached_offer_count"])
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value)); item.setData(Qt.ItemDataRole.UserRole, entry["release_id"]); self.watch_table.setItem(row, column, item)
         self.alert_table.setRowCount(0)
@@ -325,7 +333,9 @@ class MainWindow(QMainWindow):
         count = result.get("alerts", 0) if isinstance(result, dict) else 0
         checked = result.get("checked", 0) if isinstance(result, dict) else 0
         partial = result.get("partial", 0) if isinstance(result, dict) else 0
-        status = f"Проверено: {checked}; новых alerts: {count}"
+        fresh = result.get("fresh_offers", 0) if isinstance(result, dict) else 0
+        cached = result.get("cached_offers", 0) if isinstance(result, dict) else 0
+        status = f"Проверено: {checked}; свежих: {fresh}; из кэша: {cached}; новых alerts: {count}"
         if partial:
             status += f"; частичных: {partial}"
         if self.scheduler.enabled:

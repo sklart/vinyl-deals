@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-CURRENT_VERSION = 7
+CURRENT_VERSION = 8
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS raw_products (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_product_id TEXT NOT NULL, fetched_at TEXT NOT NULL, payload_json TEXT NOT NULL, UNIQUE(source, source_product_id));
@@ -191,6 +191,17 @@ def migrate_v7(connection: sqlite3.Connection) -> None:
             connection.execute(f"ALTER TABLE watchlist ADD COLUMN {name} {definition}")
 
 
+def migrate_v8(connection: sqlite3.Connection) -> None:
+    """Keep live evidence separate from a display-only cache fallback."""
+    columns = _columns(connection, "watchlist")
+    for name, definition in {
+        "last_fresh_offer_count": "INTEGER NOT NULL DEFAULT 0",
+        "last_cached_offer_count": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE watchlist ADD COLUMN {name} {definition}")
+
+
 def migrate(connection: sqlite3.Connection) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version > CURRENT_VERSION:
@@ -222,3 +233,7 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 7:
         migrate_v7(connection)
         connection.execute("PRAGMA user_version = 7")
+        version = 7
+    if version < 8:
+        migrate_v8(connection)
+        connection.execute("PRAGMA user_version = 8")

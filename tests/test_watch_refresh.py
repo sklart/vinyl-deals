@@ -6,7 +6,7 @@ from vinyl_deals.domain import Availability, RawOffer, StoreSearchQuery, StoreSe
 from vinyl_deals.live_search import LiveSearchResult, LiveStoreResult
 from vinyl_deals.matching.service import build_match_queue
 from vinyl_deals.scheduler import run_cycle
-from vinyl_deals.watch_refresh import query_for_release, refresh_watchlist
+from vinyl_deals.watch_refresh import fallback_queries, query_for_release, refresh_watchlist
 
 
 def _release(repository, identifier: str, *, barcode="4006381333931", catalog="MOVLP001", label="Music On Vinyl"):
@@ -48,6 +48,32 @@ def test_watch_query_falls_back_to_catalog_then_artist_title(tmp_path):
     text_release = _release(repository, "2", barcode=None, catalog=None, label=None)
     text_query = query_for_release(text_release)
     assert text_query.text() == "Opeth Blackwater Park"
+
+
+def test_watch_fallbacks_keep_pressing_identifiers_and_become_broader(tmp_path):
+    repository = SQLiteRepository(tmp_path / "watch.sqlite3")
+    release = _release(repository, "1")
+    queries = fallback_queries(release)
+    assert [query.text() for query in queries] == ["04006381333931", "MOVLP001 Music On Vinyl", "Opeth Blackwater Park"]
+    assert all(query.barcode == "04006381333931" for query in queries)
+    assert all(query.catalog_number == "MOVLP001" and query.label == "Music On Vinyl" for query in queries)
+
+
+def test_empty_strong_query_falls_back_without_relaxing_identifiers(tmp_path):
+    repository = SQLiteRepository(tmp_path / "watch.sqlite3")
+    release = _release(repository, "1")
+    repository.add_watchlist(release.id)
+    attempted = []
+
+    def search(_repository, query):
+        attempted.append(query)
+        return _result(query, offers=0, statuses=(StoreSearchStatus.EMPTY,))
+
+    result = refresh_watchlist(repository, live_search_service=search)
+    assert [query.text() for query in attempted] == ["04006381333931", "MOVLP001 Music On Vinyl", "Opeth Blackwater Park"]
+    assert all(query.barcode == "04006381333931" for query in attempted)
+    assert result.checked == 1 and result.offers_updated == 0
+    assert repository.watchlist_entries()[0]["last_check_status"] == "NO_RESULTS"
 
 
 def test_watch_refresh_is_targeted_deduplicated_and_persists_partial_state(tmp_path):
@@ -115,7 +141,7 @@ def test_no_watchlist_causes_zero_network_calls_and_scheduler_skips_full_refresh
     result = refresh_watchlist(repository, live_search_service=lambda *_args: calls.append(True))
     assert result.watched == result.checked == result.offers_updated == 0 and not calls
     cycle = run_cycle(repository, live_search_service=lambda *_args: calls.append(True))
-    assert cycle == {"watched": 0, "checked": 0, "partial": 0, "offers_updated": 0, "alerts": 0, "sent": 0, "failed": 0}
+    assert cycle == {"watched": 0, "checked": 0, "partial": 0, "offers_updated": 0, "fresh_offers": 0, "cached_offers": 0, "alerts": 0, "sent": 0, "failed": 0}
     assert not calls
 
 
@@ -130,6 +156,41 @@ def test_error_or_restricted_watch_refresh_keeps_existing_offer_and_no_false_ale
     assert entry["last_check_status"] == "ERROR"
     assert repository.offers_for_release(release.id)
     assert not run_cycle(repository, live_search_service=search)["alerts"]
+
+
+def test_cached_offer_is_visible_but_never_creates_watch_alert(tmp_path):
+    repository = SQLiteRepository(tmp_path / "watch.sqlite3")
+    release = _release(repository, "1", barcode=None, catalog=None, label=None)
+    repository.add_watchlist(release.id)
+    offer_id = next(offer_id for offer_id, _ in repository.offers_for_release(release.id))
+
+    def search(_repository, query):
+        cached = LiveStoreResult("seed", StoreState.DEGRADED, 1, cached=True, status=StoreSearchStatus.CACHED)
+        return LiveSearchResult(query, (), (cached,), fresh_offer_ids=(), cached_offer_ids=(offer_id,))
+
+    cycle = run_cycle(repository, live_search_service=search)
+    entry = repository.watchlist_entries()[0]
+    assert cycle["fresh_offers"] == 0 and cycle["cached_offers"] == 1 and cycle["alerts"] == 0
+    assert entry["last_fresh_offer_count"] == 0 and entry["last_cached_offer_count"] == 1
+
+
+def test_cached_fallback_is_retained_when_broader_live_queries_are_empty(tmp_path):
+    repository = SQLiteRepository(tmp_path / "watch.sqlite3")
+    release = _release(repository, "1")
+    repository.add_watchlist(release.id)
+    offer_id = next(offer_id for offer_id, _ in repository.offers_for_release(release.id))
+
+    def search(_repository, query):
+        if query.search_text == "04006381333931":
+            cached = LiveStoreResult("seed", StoreState.DEGRADED, 1, cached=True, status=StoreSearchStatus.CACHED)
+            return LiveSearchResult(query, (), (cached,), cached_offer_ids=(offer_id,))
+        return _result(query, offers=0, statuses=(StoreSearchStatus.EMPTY,))
+
+    refreshed = refresh_watchlist(repository, live_search_service=search)
+    entry = repository.watchlist_entries()[0]
+    assert refreshed.fresh_offers == 0 and refreshed.cached_offers == 1
+    assert entry["last_check_status"] == "OK"
+    assert entry["last_cached_offer_count"] == 1
 
 
 def test_scheduler_refreshes_pricing_before_evaluating_and_deduplicates_alerts(tmp_path, monkeypatch):

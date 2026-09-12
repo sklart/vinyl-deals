@@ -66,24 +66,30 @@ def _passes_filters(entry: dict[str, object], offer: RawOffer) -> bool:
     return bool(offer.price is not None and offer.price <= maximum)
 
 
-def _payload(release: Release, offer: RawOffer, deal, event_type: str) -> dict[str, object]:
+def _payload(repository: SQLiteRepository, release: Release, offer: RawOffer, deal, event_type: str) -> dict[str, object]:
     effective = calculate_effective_price(offer)
+    confirmed = repository.confirmed_discogs_match(release.id)
     return {
         "event_type": event_type, "artist": release.artist, "title": release.title,
         "label": release.label, "catalog_number": release.catalog_number, "release_year": release.release_year,
         "store": offer.source, "price": offer.price, "market_median": deal.market_median if deal else None,
-        "discount_pct": deal.discount_pct if deal else None, "url": offer.url, "discogs_url": discogs_search_url(release),
+        "discount_pct": deal.discount_pct if deal else None, "url": offer.url,
+        "discogs_url": str(confirmed["discogs_url"]) if confirmed else discogs_search_url(release),
         "local_store": offer.local_store, "city": offer.city, "pickup_available": offer.pickup_available,
         "effective_price": effective.total if effective else None,
         "effective_price_known": effective.delivery_known if effective else False,
     }
 
 
-def evaluate_watchlist(repository: SQLiteRepository, *, now: datetime | None = None, freshness_days: int = DEFAULT_FRESHNESS_DAYS, release_ids: Iterable[int] | None = None) -> list[AlertCandidate]:
+def evaluate_watchlist(repository: SQLiteRepository, *, now: datetime | None = None,
+                       freshness_days: int = DEFAULT_FRESHNESS_DAYS,
+                       release_ids: Iterable[int] | None = None,
+                       offer_ids: Iterable[int] | None = None) -> list[AlertCandidate]:
     """Evaluate enabled watches and persist only alert states not seen before."""
     point = now or datetime.now(timezone.utc)
     candidates: list[AlertCandidate] = []
     selected_ids = set(release_ids) if release_ids is not None else None
+    selected_offer_ids = set(offer_ids) if offer_ids is not None else None
     for entry in repository.watchlist_entries(enabled_only=True):
         if selected_ids is not None and int(entry["release_id"]) not in selected_ids:
             continue
@@ -91,6 +97,10 @@ def evaluate_watchlist(repository: SQLiteRepository, *, now: datetime | None = N
         if release is None:
             continue
         for offer_id, offer in repository.offers_for_release(release.id):
+            # A cache fallback is informative in search UI, but it is not
+            # evidence of present stock or a new price for notifications.
+            if selected_offer_ids is not None and offer_id not in selected_offer_ids:
+                continue
             if offer.availability != Availability.IN_STOCK or offer.fetched_at < point - timedelta(days=freshness_days) or not _passes_filters(entry, offer):
                 continue
             deal = evaluate_offer(repository, offer_id, now=point, freshness_days=freshness_days)
@@ -105,7 +115,7 @@ def evaluate_watchlist(repository: SQLiteRepository, *, now: datetime | None = N
             if deal and _meets_deal_threshold(str(deal.deal_class), entry["min_deal_class"] if isinstance(entry["min_deal_class"], str) else None):
                 events.append((AlertEvent.GOOD_DEAL, f"deal:{deal.deal_class}:{deal.discount_pct}"))
             for event_type, state in events:
-                candidate = AlertCandidate(release.id, offer_id, event_type, state, _payload(release, offer, deal, event_type))
+                candidate = AlertCandidate(release.id, offer_id, event_type, state, _payload(repository, release, offer, deal, event_type))
                 if repository.save_alert(release_id=candidate.release_id, offer_id=candidate.offer_id, event_type=candidate.event_type, event_key=candidate.event_key, payload=candidate.payload):
                     candidates.append(candidate)
     return candidates

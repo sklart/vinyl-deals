@@ -20,14 +20,14 @@ logger = logging.getLogger("vinyl_deals.scheduler")
 def run_cycle(repository: SQLiteRepository, *, live_search_service: Callable = live_search, auto_send: bool = False, progress: Callable[[str], None] | None = None) -> dict[str, int]:
     emit = progress or (lambda _message: None)
     logger.info("Scheduler cycle started")
-    refreshed = refresh_watchlist(repository, live_search_service=live_search_service, progress=emit)
     emit("Проверка watchlist...")
+    refreshed = refresh_watchlist(repository, live_search_service=live_search_service, progress=emit)
     eligible = [
         int(entry["release_id"])
         for entry in repository.watchlist_entries(enabled_only=True)
-        if entry["last_check_status"] in {"OK", "PARTIAL"} and int(entry["last_offer_count"] or 0) > 0
+        if entry["last_check_status"] in {"OK", "PARTIAL"} and int(entry["last_fresh_offer_count"] or 0) > 0
     ]
-    alerts = evaluate_watchlist(repository, release_ids=eligible)
+    alerts = evaluate_watchlist(repository, release_ids=eligible, offer_ids=refreshed.fresh_offer_ids)
     sent = failed = 0
     if auto_send:
         try:
@@ -37,8 +37,8 @@ def run_cycle(repository: SQLiteRepository, *, live_search_service: Callable = l
             # Telegram configuration is optional; an unavailable transport
             # must never roll back alerts produced by this cycle.
             pass
-    logger.info("Scheduler cycle completed: watched=%s checked=%s partial=%s offers=%s alerts=%s sent=%s failed=%s", refreshed.watched, refreshed.checked, refreshed.partial, refreshed.offers_updated, len(alerts), sent, failed)
-    return {"watched": refreshed.watched, "checked": refreshed.checked, "partial": refreshed.partial, "offers_updated": refreshed.offers_updated, "alerts": len(alerts), "sent": sent, "failed": failed}
+    logger.info("Scheduler cycle completed: watched=%s checked=%s partial=%s fresh=%s cached=%s alerts=%s sent=%s failed=%s", refreshed.watched, refreshed.checked, refreshed.partial, refreshed.fresh_offers, refreshed.cached_offers, len(alerts), sent, failed)
+    return {"watched": refreshed.watched, "checked": refreshed.checked, "partial": refreshed.partial, "offers_updated": refreshed.offers_updated, "fresh_offers": refreshed.fresh_offers, "cached_offers": refreshed.cached_offers, "alerts": len(alerts), "sent": sent, "failed": failed}
 
 
 class CycleWorker(QThread):
@@ -47,13 +47,27 @@ class CycleWorker(QThread):
     failed = Signal(str)
 
     def __init__(self, repository: SQLiteRepository, *, live_search_service: Callable = live_search, auto_send: bool = False) -> None:
-        super().__init__(); self.repository = repository; self.live_search_service = live_search_service; self.auto_send = auto_send
+        super().__init__()
+        self.repository, self.live_search_service, self.auto_send = repository, live_search_service, auto_send
+        # Retain the terminal state until the owner has handled it.  QThread's
+        # ``finished`` notification can be delivered to the GUI before a
+        # queued custom ``completed`` signal, especially under a busy Qt test
+        # event loop.
+        self.result: object | None = None
+        self.error: str | None = None
+        self.terminal_delivered = False
 
     def run(self) -> None:
-        try: self.completed.emit(run_cycle(self.repository, live_search_service=self.live_search_service, auto_send=self.auto_send, progress=self.progress.emit))
+        try:
+            self.result = run_cycle(
+                self.repository, live_search_service=self.live_search_service,
+                auto_send=self.auto_send, progress=self.progress.emit,
+            )
+            self.completed.emit(self.result)
         except Exception as error:
             logger.exception("Scheduler cycle failed")
-            self.failed.emit(str(error))
+            self.error = str(error)
+            self.failed.emit(self.error)
 
 
 class Scheduler(QObject):
@@ -82,16 +96,42 @@ class Scheduler(QObject):
     def trigger(self) -> bool:
         if self.shutting_down or self.running or not self.start_guard(): return False
         worker = CycleWorker(self.repository, live_search_service=self.live_search_service, auto_send=self.auto_send)
-        self.worker = worker; worker.progress.connect(self.status); worker.completed.connect(self._completed); worker.failed.connect(self.cycle_failed); worker.finished.connect(lambda: self._finished(worker)); self.running_changed.emit(True); worker.start(); return True
+        self.worker = worker
+        worker.progress.connect(self.status)
+        worker.completed.connect(lambda result: self._completed(worker, result))
+        worker.failed.connect(lambda message: self._failed(worker, message))
+        worker.finished.connect(lambda: self._finished(worker))
+        self.running_changed.emit(True)
+        worker.start()
+        return True
 
-    def _completed(self, result: object) -> None: self.cycle_completed.emit(result)
+    def _completed(self, worker: CycleWorker, result: object) -> None:
+        if worker.terminal_delivered:
+            return
+        worker.terminal_delivered = True
+        self.cycle_completed.emit(result)
+
+    def _failed(self, worker: CycleWorker, message: str) -> None:
+        if worker.terminal_delivered:
+            return
+        worker.terminal_delivered = True
+        self.cycle_failed.emit(message)
+
     def _finished(self, worker: CycleWorker) -> None:
         # An old queued ``finished`` signal must never clean up a new cycle.
         if worker is not self.worker:
             return
-        worker.deleteLater()
+        # Do not let an early ``finished`` delivery swallow the custom result
+        # signal. Deliver the retained outcome here if needed, then defer
+        # object disposal until the current GUI event batch has completed.
+        if not worker.terminal_delivered:
+            if worker.error is not None:
+                self._failed(worker, worker.error)
+            elif worker.result is not None:
+                self._completed(worker, worker.result)
         self.worker = None
         self.running_changed.emit(False)
+        QTimer.singleShot(0, worker.deleteLater)
 
     def shutdown(self) -> None:
         self.timer.stop()
