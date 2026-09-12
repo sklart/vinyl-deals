@@ -27,7 +27,9 @@ def run_cycle(repository: SQLiteRepository, *, live_search_service: Callable = l
         for entry in repository.watchlist_entries(enabled_only=True)
         if entry["last_check_status"] in {"OK", "PARTIAL"} and int(entry["last_fresh_offer_count"] or 0) > 0
     ]
-    alerts = evaluate_watchlist(repository, release_ids=eligible, offer_ids=refreshed.fresh_offer_ids)
+    # Possible broad artist/title hits and cache fallbacks are deliberately
+    # excluded: only detail-validated fresh evidence can create an alert.
+    alerts = evaluate_watchlist(repository, release_ids=eligible, offer_ids=refreshed.fresh_confirmed_offer_ids)
     sent = failed = 0
     if auto_send:
         try:
@@ -37,8 +39,8 @@ def run_cycle(repository: SQLiteRepository, *, live_search_service: Callable = l
             # Telegram configuration is optional; an unavailable transport
             # must never roll back alerts produced by this cycle.
             pass
-    logger.info("Scheduler cycle completed: watched=%s checked=%s partial=%s fresh=%s cached=%s alerts=%s sent=%s failed=%s", refreshed.watched, refreshed.checked, refreshed.partial, refreshed.fresh_offers, refreshed.cached_offers, len(alerts), sent, failed)
-    return {"watched": refreshed.watched, "checked": refreshed.checked, "partial": refreshed.partial, "offers_updated": refreshed.offers_updated, "fresh_offers": refreshed.fresh_offers, "cached_offers": refreshed.cached_offers, "alerts": len(alerts), "sent": sent, "failed": failed}
+    logger.info("Scheduler cycle completed: watched=%s checked=%s partial=%s confirmed=%s possible=%s cached=%s alerts=%s sent=%s failed=%s", refreshed.watched, refreshed.checked, refreshed.partial, refreshed.fresh_confirmed_offers, refreshed.possible_offers, refreshed.cached_offers, len(alerts), sent, failed)
+    return {"watched": refreshed.watched, "checked": refreshed.checked, "partial": refreshed.partial, "offers_updated": refreshed.offers_updated, "fresh_offers": refreshed.fresh_confirmed_offers, "possible_offers": refreshed.possible_offers, "cached_offers": refreshed.cached_offers, "alerts": len(alerts), "sent": sent, "failed": failed}
 
 
 class CycleWorker(QThread):

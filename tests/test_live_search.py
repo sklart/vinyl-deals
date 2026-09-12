@@ -103,6 +103,19 @@ def test_live_search_does_not_call_full_catalogue(tmp_path):
     assert result.stores[0].offers == 1
 
 
+def test_live_search_can_target_only_unresolved_store_sources(tmp_path):
+    result = live_search(
+        SQLiteRepository(tmp_path / "one-store.sqlite3"), StoreSearchQuery(title="Wish You Were Here"),
+        adapter_factories={
+            "first": lambda: Adapter("first", (offer("first", "1", 5000),)),
+            "second": lambda: Adapter("second", (offer("second", "1", 4000),)),
+        },
+        sources=("second",),
+    )
+    assert [item.source for item in result.stores] == ["second"]
+    assert result.fresh_confirmed_offer_ids == result.fresh_offer_ids
+
+
 def test_identifier_query_keeps_listing_without_id_when_detail_confirms_barcode(tmp_path):
     listing = offer("detail", "1", 5000, barcode=None)
     class DetailAdapter(Adapter):

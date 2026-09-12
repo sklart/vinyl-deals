@@ -11,8 +11,7 @@ def test_doctor_stores_is_network_free_and_lists_search_price_and_detail(tmp_pat
     assert cli.main() == 0
 
     output = capsys.readouterr().out
-    assert "Respublica" in output and "LIVE OK" in output and "DETAIL OK" in output
+    assert "Respublica" in output and "search capability: PUBLIC SEARCH" in output and "price capability: PRODUCT DETAIL" in output
     assert "РИО" in output and "UNSUPPORTED" in output
-    assert "OnlineTrade" in output and "RESTRICTED" in output
-    assert "Pult.ru" in output and "last:" in output
-
+    assert "OnlineTrade" in output and "last status: RESTRICTED" in output
+    assert "Pult.ru" in output and "last status:" in output

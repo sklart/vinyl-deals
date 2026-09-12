@@ -9,10 +9,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace
+from inspect import Parameter, signature
 
 from vinyl_deals.database.repository import SQLiteRepository
-from vinyl_deals.domain import Release, StoreSearchQuery, StoreSearchStatus
+from vinyl_deals.domain import RawOffer, Release, StoreSearchQuery, StoreSearchStatus
 from vinyl_deals.live_search import LiveSearchResult, live_search
+from vinyl_deals.matching.normalize import catalog_number, format_and_disc_count, normalize_barcode, text
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,9 +23,21 @@ class WatchRefreshResult:
     checked: int
     partial: int
     offers_updated: int
-    fresh_offers: int = 0
+    fresh_confirmed_offers: int = 0
+    possible_offers: int = 0
     cached_offers: int = 0
-    fresh_offer_ids: tuple[int, ...] = ()
+    fresh_confirmed_offer_ids: tuple[int, ...] = ()
+    possible_offer_ids: tuple[int, ...] = ()
+
+    @property
+    def fresh_offers(self) -> int:
+        """Compatibility name: only confirmed fresh evidence is fresh."""
+        return self.fresh_confirmed_offers
+
+    @property
+    def fresh_offer_ids(self) -> tuple[int, ...]:
+        """Compatibility name for alert callers."""
+        return self.fresh_confirmed_offer_ids
 
 
 def query_for_release(release: Release) -> StoreSearchQuery:
@@ -67,21 +81,91 @@ def _query_key(query: StoreSearchQuery) -> tuple[str | None, ...]:
     return (query.barcode, query.catalog_number, query.label, query.artist, query.title)
 
 
-def _status(result: LiveSearchResult) -> tuple[str, int, int, int, bool]:
+def _status(stores: tuple[object, ...], confirmed_count: int, possible_count: int, cached_count: int) -> tuple[str, int, bool]:
     """Translate structured per-store outcomes into a persisted watch state."""
-    stores = result.stores
-    fresh_count = result.fresh_offer_count
-    cached_count = result.cached_offer_count
-    offer_count = fresh_count + cached_count
+    offer_count = confirmed_count + possible_count + cached_count
     succeeded = [store for store in stores if store.status_kind in {StoreSearchStatus.FOUND.value, StoreSearchStatus.EMPTY.value, StoreSearchStatus.CACHED.value}]
     unavailable = [store for store in stores if store.status_kind not in {StoreSearchStatus.FOUND.value, StoreSearchStatus.EMPTY.value, StoreSearchStatus.CACHED.value}]
     if not succeeded:
-        return "ERROR", offer_count, fresh_count, cached_count, False
+        return "ERROR", offer_count, False
     if unavailable:
-        return "PARTIAL", offer_count, fresh_count, cached_count, True
+        return "PARTIAL", offer_count, True
     if offer_count == 0:
-        return "NO_RESULTS", 0, 0, 0, False
-    return "OK", offer_count, fresh_count, cached_count, False
+        return "NO_RESULTS", 0, False
+    return "OK", offer_count, False
+
+
+def _service_supports_sources(service: Callable[..., LiveSearchResult]) -> bool:
+    """Keep pre-Phase-13 injected test services source-compatible."""
+    try:
+        parameters = signature(service).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(parameter.name == "sources" or parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters)
+
+
+def _search_sources(service: Callable[..., LiveSearchResult], repository: SQLiteRepository,
+                    query: StoreSearchQuery, sources: tuple[str, ...] | None) -> LiveSearchResult:
+    if sources is not None and _service_supports_sources(service):
+        return service(repository, query, sources=sources)
+    return service(repository, query)
+
+
+def _conflicts(release: Release, offer: RawOffer) -> bool:
+    """Reject positive conflicting identifiers; absent metadata is neutral."""
+    release_barcode, offer_barcode = normalize_barcode(release.barcode), normalize_barcode(offer.barcode)
+    if release_barcode and offer_barcode and release_barcode != offer_barcode:
+        return True
+    release_catalog, offer_catalog = catalog_number(release.catalog_number), catalog_number(offer.catalog_number_raw)
+    if release_catalog and offer_catalog and release_catalog != offer_catalog:
+        return True
+    if release.label and offer.label and text(release.label) != text(offer.label):
+        return True
+    release_format, release_count = format_and_disc_count(release.format, release.disc_count)
+    offer_format, offer_count = format_and_disc_count(offer.format, offer.disc_count)
+    for left, right in (
+        (release.release_year, offer.release_year), (release.country, offer.country),
+        (release_format, offer_format), (release_count, offer_count),
+        (release.vinyl_size, offer.vinyl_size), (release.rpm, offer.rpm),
+        (release.vinyl_color, offer.vinyl_color),
+    ):
+        if left not in (None, "") and right not in (None, "") and text(str(left)) != text(str(right)):
+            return True
+    return False
+
+
+def _broad_identity(release: Release, offer: RawOffer) -> str:
+    """Classify artist/title fallback as confirmed, possible, or rejected."""
+    if _conflicts(release, offer):
+        return "rejected"
+    release_barcode, offer_barcode = normalize_barcode(release.barcode), normalize_barcode(offer.barcode)
+    if release_barcode and release_barcode == offer_barcode:
+        return "confirmed"
+    release_catalog, offer_catalog = catalog_number(release.catalog_number), catalog_number(offer.catalog_number_raw)
+    if (release_catalog and offer_catalog and release_catalog == offer_catalog and release.label and offer.label
+            and text(release.label) == text(offer.label)):
+        return "confirmed"
+    release_format, release_count = format_and_disc_count(release.format, release.disc_count)
+    offer_format, offer_count = format_and_disc_count(offer.format, offer.disc_count)
+    physical = (
+        release.release_year, offer.release_year, release.country, offer.country,
+        release_format, offer_format, release_count, offer_count,
+    )
+    if all(value not in (None, "") for value in physical):
+        return "confirmed"
+    return "possible"
+
+
+def _ids_for_source(repository: SQLiteRepository, offer_ids: tuple[int, ...], source: str) -> set[int]:
+    """Resolve persisted IDs without making a sparse result an alert input."""
+    found: set[int] = set()
+    for offer_id in offer_ids:
+        try:
+            if repository.offer_by_id(offer_id)[1].source == source:
+                found.add(offer_id)
+        except (KeyError, ValueError):
+            continue
+    return found
 
 
 def refresh_watchlist(
@@ -110,8 +194,9 @@ def refresh_watchlist(
             continue
         groups.setdefault(_query_key(query_for_release(release)), []).append(entry)
 
-    checked = partial = offers_updated = fresh_offers = cached_offers = 0
-    fresh_offer_ids: set[int] = set()
+    checked = partial = offers_updated = confirmed_offers = possible_offers = cached_offers = 0
+    confirmed_ids: set[int] = set()
+    possible_ids: set[int] = set()
     total = len(groups)
     for index, grouped_entries in enumerate(groups.values(), start=1):
         release = repository.release_by_id(int(grouped_entries[0]["release_id"]))
@@ -120,27 +205,75 @@ def refresh_watchlist(
         queries = fallback_queries(release)
         emit(f"Проверка {index}/{total}: {release.artist} — {release.title}")
         try:
-            result = None
-            cached_result = None
-            for query in queries:
-                result = live_search_service(repository, query)
-                # A display-only cached answer intentionally does not stop
-                # the fallback chain: it cannot confirm present stock.
-                if result.fresh_offer_count:
+            # Each store progresses through GTIN -> catalog -> artist/title
+            # independently. A hit from Store A must not suppress the
+            # fallback needed by Store B.
+            selected: dict[str, object] = {}
+            cached_by_source: dict[str, set[int]] = {}
+            release_results: dict[int, object] = {}
+            unresolved: tuple[str, ...] | None = None
+            group_confirmed: set[int] = set()
+            group_possible: set[int] = set()
+            for fallback_index, query in enumerate(queries):
+                result = _search_sources(live_search_service, repository, query, unresolved)
+                for item in result.stores:
+                    if item.source in selected and getattr(selected[item.source], "status_kind") == StoreSearchStatus.FOUND.value:
+                        continue
+                    selected[item.source] = item
+                    if item.status_kind == StoreSearchStatus.FOUND.value and item.offers:
+                        # A narrow GTIN/catalog response is independently
+                        # confirmed by the query; artist/title needs physical
+                        # evidence after detail enrichment.
+                        offer_ids = set(result.fresh_offer_ids)
+                        source_ids = _ids_for_source(repository, tuple(offer_ids), item.source)
+                        if fallback_index < 2:
+                            group_confirmed.update(source_ids)
+                        else:
+                            for offer_id in source_ids:
+                                evidence = _broad_identity(release, repository.offer_by_id(offer_id)[1])
+                                if evidence == "confirmed":
+                                    group_confirmed.add(offer_id)
+                                elif evidence == "possible":
+                                    group_possible.add(offer_id)
+                        # A source that reports found is resolved even when a
+                        # sparse test/dry-run result lacks persisted IDs.
+                    elif item.status_kind == StoreSearchStatus.CACHED.value:
+                        cached_by_source.setdefault(item.source, set()).update(
+                            _ids_for_source(repository, result.cached_offer_ids, item.source)
+                        )
+                for found_release in result.releases:
+                    release_results[found_release.release_id] = found_release
+                unresolved = tuple(
+                    source for source, item in selected.items()
+                    if item.status_kind != StoreSearchStatus.FOUND.value or not item.offers
+                )
+                if not unresolved:
                     break
-                if result.cached_offer_count and cached_result is None:
-                    cached_result = result
-            # Preserve a useful cached answer for the UI if every broader
-            # live lookup was empty/unavailable.  It still cannot create an
-            # alert because only ``fresh_offer_ids`` are passed downstream.
-            if result is not None and not result.fresh_offer_count and cached_result is not None:
-                result = cached_result
-            assert result is not None
-            state, count, fresh_count, cached_count, is_partial = _status(result)
+            stores = tuple(selected.values())
+            cached_ids = set().union(*cached_by_source.values()) if cached_by_source else set()
+            cached_ids -= group_confirmed | group_possible
+            # A fake/non-persisting service can still report a confirmed
+            # narrow result for GUI progress, but it can never create an
+            # alert: downstream only receives persisted confirmed IDs.
+            possible_sources = {
+                repository.offer_by_id(offer_id)[1].source for offer_id in group_possible
+            }
+            report_confirmed = len(group_confirmed) or sum(
+                item.offers for item in stores
+                if item.status_kind == StoreSearchStatus.FOUND.value and item.source not in possible_sources
+            )
+            state, count, is_partial = _status(stores, report_confirmed, len(group_possible), len(cached_ids))
+            result = LiveSearchResult(
+                query_for_release(release), tuple(release_results.values()), stores,
+                fresh_confirmed_offer_ids=tuple(sorted(group_confirmed)),
+                possible_offer_ids=tuple(sorted(group_possible)),
+                fresh_offer_ids=tuple(sorted(group_confirmed)), cached_offer_ids=tuple(sorted(cached_ids)),
+            )
+            fresh_count, possible_count, cached_count = report_confirmed, len(group_possible), len(cached_ids)
         except Exception:
             # A failed lookup never mutates or removes older offers.  Its only
             # durable effect is diagnostic state for the associated watches.
-            state, count, fresh_count, cached_count, is_partial = "ERROR", 0, 0, 0, False
+            state, count, fresh_count, possible_count, cached_count, is_partial = "ERROR", 0, 0, 0, 0, False
         for entry in grouped_entries:
             repository.record_watch_refresh(
                 int(entry["release_id"]), status=state, offer_count=count,
@@ -148,12 +281,15 @@ def refresh_watchlist(
             )
             checked += 1
         offers_updated += count
-        fresh_offers += fresh_count
+        confirmed_offers += fresh_count
+        possible_offers += possible_count
         cached_offers += cached_count
         if result is not None:
-            fresh_offer_ids.update(result.fresh_offer_ids)
+            confirmed_ids.update(result.fresh_confirmed_offer_ids)
+            possible_ids.update(result.possible_offer_ids)
         partial += len(grouped_entries) if is_partial else 0
     return WatchRefreshResult(
         len(entries), checked, partial, offers_updated,
-        fresh_offers, cached_offers, tuple(sorted(fresh_offer_ids)),
+        confirmed_offers, possible_offers, cached_offers,
+        tuple(sorted(confirmed_ids)), tuple(sorted(possible_ids)),
     )

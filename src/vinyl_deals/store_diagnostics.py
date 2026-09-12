@@ -13,8 +13,8 @@ from vinyl_deals.updates import DEFAULT_ADAPTER_FACTORIES, STORE_LABELS
 class StoreCoverage:
     source: str
     label: str
-    search: str
-    price: str
+    search_capability: str
+    price_capability: str
     detail_enrichment: str
     last_known_status: str
 
@@ -33,16 +33,18 @@ def store_coverage(repository: SQLiteRepository) -> tuple[StoreCoverage, ...]:
     rows = []
     for source, factory in AUDITED_FACTORIES.items():
         adapter = factory()
-        reason = getattr(adapter, "targeted_search_reason", None)
-        if source in {"pult", "onlinetrade"}:
-            search, price = "RESTRICTED", "RESTRICTED"
-        elif reason:
-            search, price = "UNSUPPORTED", "UNSUPPORTED"
-        else:
-            search, price = "LIVE OK", "DETAIL OK"
+        search_implemented = type(adapter).search_offers is not BaseStoreAdapter.search_offers
+        detail_implemented = type(adapter).enrich_offer is not BaseStoreAdapter.enrich_offer
+        search = "PUBLIC SEARCH" if search_implemented else "UNSUPPORTED"
+        price = "PRODUCT DETAIL" if detail_implemented else "LISTING ONLY"
+        # This is the last audited access outcome, not a statement about
+        # whether a public search URL is declared by the adapter. A future
+        # store recovery therefore changes runtime status without rewriting
+        # its capability.
+        audited = "RESTRICTED" if source in {"pult", "onlinetrade"} else "not audited"
         rows.append(StoreCoverage(
             source, AUDITED_LABELS.get(source, source), search, price,
-            "NO" if type(adapter).enrich_offer is BaseStoreAdapter.enrich_offer else "YES",
-            history.get(source, "unknown"),
+            "YES" if detail_implemented else "NO",
+            history.get(source, audited),
         ))
     return tuple(rows)

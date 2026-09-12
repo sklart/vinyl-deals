@@ -50,6 +50,11 @@ class LiveSearchResult:
     releases: tuple[ReleaseSearchResult, ...]
     stores: tuple[LiveStoreResult, ...]
     possible_matches: tuple[tuple[int, int, float, str], ...] = ()
+    # A normal live search has no watch-specific validation stage, so every
+    # fresh persisted offer is confirmed by default.  Targeted watch refresh
+    # may narrow this set after a broad artist/title lookup.
+    fresh_confirmed_offer_ids: tuple[int, ...] = ()
+    possible_offer_ids: tuple[int, ...] = ()
     fresh_offer_ids: tuple[int, ...] = ()
     cached_offer_ids: tuple[int, ...] = ()
 
@@ -61,6 +66,11 @@ class LiveSearchResult:
             store.offers for store in self.stores
             if not store.cached and store.status_kind == StoreSearchStatus.FOUND.value
         )
+
+    @property
+    def fresh_confirmed_offer_count(self) -> int:
+        """Fresh evidence safe to use for a watchlist alert."""
+        return len(self.fresh_confirmed_offer_ids) or len(self.fresh_offer_ids)
 
     @property
     def cached_offer_count(self) -> int:
@@ -174,6 +184,7 @@ def live_search(
     query: StoreSearchQuery,
     *,
     adapter_factories: dict[str, Callable[[], object]] | None = None,
+    sources: tuple[str, ...] | None = None,
     per_store_timeout: float = 15.0,
     global_timeout: float = 45.0,
     enrichment_limit: int = 10,
@@ -185,6 +196,9 @@ def live_search(
     if per_store_timeout <= 0 or global_timeout <= 0 or enrichment_limit < 1:
         raise ValueError("Live-search timeouts and enrichment_limit must be positive.")
     factories = adapter_factories or DEFAULT_ADAPTER_FACTORIES
+    if sources is not None:
+        requested = set(sources)
+        factories = {source: factory for source, factory in factories.items() if source in requested}
     callback = progress or (lambda _result: None)
     started = monotonic()
     executor = ThreadPoolExecutor(max_workers=max(1, len(factories)), thread_name_prefix="vinyl-live-search")
@@ -266,5 +280,5 @@ def live_search(
     return LiveSearchResult(
         query, releases,
         tuple(reports.get(source, LiveStoreResult(source, StoreState.DEGRADED, 0)) for source in factories),
-        possible, fresh_ids, cached_ids,
+        possible, fresh_ids, (), fresh_ids, cached_ids,
     )

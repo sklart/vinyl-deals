@@ -49,7 +49,7 @@ def main() -> int:
         from vinyl_deals.store_diagnostics import store_coverage
         repository = SQLiteRepository(default_database)
         for row in store_coverage(repository):
-            print(f"{row.label:<18} search: {row.search:<11} price: {row.price:<11} detail: {row.detail_enrichment:<3} last: {row.last_known_status}")
+            print(f"{row.label:<18} search capability: {row.search_capability:<13} price capability: {row.price_capability:<14} detail: {row.detail_enrichment:<3} last status: {row.last_known_status}")
         return 0
     if args.command == "repair-metadata":
         changed = SQLiteRepository(args.database).repair_metadata()

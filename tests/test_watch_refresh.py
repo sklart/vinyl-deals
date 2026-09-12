@@ -30,6 +30,19 @@ def _result(query, *, offers=1, statuses=(StoreSearchStatus.FOUND,)):
     return LiveSearchResult(query, (), stores)
 
 
+def _candidate(repository, source: str, product_id: str, *, barcode=None, catalog=None,
+               label=None, year=None, country=None, format=None, disc_count=None):
+    repository.upsert_offer(RawOffer.now(
+        source=source, source_product_id=product_id, url=f"https://{source}.test/{product_id}",
+        artist_raw="Opeth", title_raw="Blackwater Park", barcode=barcode,
+        catalog_number_raw=catalog, label=label, release_year=year, country=country,
+        format=format, disc_count=disc_count, condition_media="NEW",
+        price=Decimal("4000"), availability=Availability.IN_STOCK,
+    ))
+    return next(offer_id for offer_id, offer in repository.offers_for_matching()
+                if offer.source == source and offer.source_product_id == product_id)
+
+
 def test_watch_query_prefers_gtin_but_keeps_other_pressing_identifiers(tmp_path):
     repository = SQLiteRepository(tmp_path / "watch.sqlite3")
     release = _release(repository, "1")
@@ -129,7 +142,9 @@ def test_timeout_marks_one_watch_partial_and_batch_continues(tmp_path):
     result = refresh_watchlist(repository, live_search_service=search)
 
     entries = {entry["release_id"]: entry for entry in repository.watchlist_entries()}
-    assert calls == ["CAT-A", "CAT-B"]
+    # Store 0 found the first term, while the timed-out store independently
+    # proceeds to the artist/title fallback before the next watch starts.
+    assert calls == ["CAT-A", "CAT-A", "CAT-B"]
     assert result.checked == 2 and result.partial == 1
     assert entries[first.id]["last_check_status"] == "PARTIAL"
     assert entries[second.id]["last_check_status"] == "OK"
@@ -141,7 +156,7 @@ def test_no_watchlist_causes_zero_network_calls_and_scheduler_skips_full_refresh
     result = refresh_watchlist(repository, live_search_service=lambda *_args: calls.append(True))
     assert result.watched == result.checked == result.offers_updated == 0 and not calls
     cycle = run_cycle(repository, live_search_service=lambda *_args: calls.append(True))
-    assert cycle == {"watched": 0, "checked": 0, "partial": 0, "offers_updated": 0, "fresh_offers": 0, "cached_offers": 0, "alerts": 0, "sent": 0, "failed": 0}
+    assert cycle == {"watched": 0, "checked": 0, "partial": 0, "offers_updated": 0, "fresh_offers": 0, "possible_offers": 0, "cached_offers": 0, "alerts": 0, "sent": 0, "failed": 0}
     assert not calls
 
 
@@ -191,6 +206,81 @@ def test_cached_fallback_is_retained_when_broader_live_queries_are_empty(tmp_pat
     assert refreshed.fresh_offers == 0 and refreshed.cached_offers == 1
     assert entry["last_check_status"] == "OK"
     assert entry["last_cached_offer_count"] == 1
+
+
+def test_each_store_gets_its_own_fallback_chain(tmp_path):
+    repository = SQLiteRepository(tmp_path / "watch.sqlite3")
+    release = _release(repository, "1")
+    repository.add_watchlist(release.id)
+    store_a = _candidate(repository, "store_a", "a", barcode="4006381333931")
+    store_b = _candidate(repository, "store_b", "b", barcode="4006381333931")
+    calls = []
+
+    def search(_repository, query, *, sources=None):
+        calls.append((query.text(), sources))
+        if sources is None:
+            return LiveSearchResult(query, (), (
+                LiveStoreResult("store_a", StoreState.ACTIVE, 1, status=StoreSearchStatus.FOUND),
+                LiveStoreResult("store_b", StoreState.ACTIVE, 0, status=StoreSearchStatus.EMPTY),
+            ), fresh_offer_ids=(store_a,))
+        assert sources == ("store_b",)
+        return LiveSearchResult(query, (), (
+            LiveStoreResult("store_b", StoreState.ACTIVE, 1, status=StoreSearchStatus.FOUND),
+        ), fresh_offer_ids=(store_b,))
+
+    refreshed = refresh_watchlist(repository, live_search_service=search)
+    assert calls == [("04006381333931", None), ("MOVLP001 Music On Vinyl", ("store_b",))]
+    assert set(refreshed.fresh_confirmed_offer_ids) == {store_a, store_b}
+    assert not refreshed.possible_offer_ids
+
+
+def test_broad_fallback_without_pressing_evidence_is_possible_and_never_alerts(tmp_path):
+    repository = SQLiteRepository(tmp_path / "watch.sqlite3")
+    release = _release(repository, "1")
+    repository.add_watchlist(release.id)
+    candidate = _candidate(repository, "store_b", "sparse")
+
+    def search(_repository, query, *, sources=None):
+        if query.search_text != "Opeth Blackwater Park":
+            return LiveSearchResult(query, (), (LiveStoreResult("store_b", StoreState.ACTIVE, 0, status=StoreSearchStatus.EMPTY),))
+        return LiveSearchResult(query, (), (LiveStoreResult("store_b", StoreState.ACTIVE, 1, status=StoreSearchStatus.FOUND),), fresh_offer_ids=(candidate,))
+
+    refreshed = refresh_watchlist(repository, live_search_service=search)
+    assert refreshed.fresh_confirmed_offer_ids == ()
+    assert refreshed.possible_offer_ids == (candidate,)
+    assert run_cycle(repository, live_search_service=search)["alerts"] == 0
+
+
+def test_broad_fallback_with_matching_identifier_is_confirmed(tmp_path):
+    repository = SQLiteRepository(tmp_path / "watch.sqlite3")
+    release = _release(repository, "1")
+    repository.add_watchlist(release.id)
+    candidate = _candidate(repository, "store_b", "confirmed", catalog="MOVLP001", label="Music On Vinyl")
+
+    def search(_repository, query, *, sources=None):
+        if query.search_text != "Opeth Blackwater Park":
+            return LiveSearchResult(query, (), (LiveStoreResult("store_b", StoreState.ACTIVE, 0, status=StoreSearchStatus.EMPTY),))
+        return LiveSearchResult(query, (), (LiveStoreResult("store_b", StoreState.ACTIVE, 1, status=StoreSearchStatus.FOUND),), fresh_offer_ids=(candidate,))
+
+    refreshed = refresh_watchlist(repository, live_search_service=search)
+    assert refreshed.fresh_confirmed_offer_ids == (candidate,)
+    assert refreshed.possible_offer_ids == ()
+
+
+def test_broad_fallback_with_conflicting_barcode_is_rejected(tmp_path):
+    repository = SQLiteRepository(tmp_path / "watch.sqlite3")
+    release = _release(repository, "1")
+    repository.add_watchlist(release.id)
+    candidate = _candidate(repository, "store_b", "wrong", barcode="4006381333948")
+
+    def search(_repository, query, *, sources=None):
+        if query.search_text != "Opeth Blackwater Park":
+            return LiveSearchResult(query, (), (LiveStoreResult("store_b", StoreState.ACTIVE, 0, status=StoreSearchStatus.EMPTY),))
+        return LiveSearchResult(query, (), (LiveStoreResult("store_b", StoreState.ACTIVE, 1, status=StoreSearchStatus.FOUND),), fresh_offer_ids=(candidate,))
+
+    refreshed = refresh_watchlist(repository, live_search_service=search)
+    assert refreshed.fresh_confirmed_offer_ids == ()
+    assert refreshed.possible_offer_ids == ()
 
 
 def test_scheduler_refreshes_pricing_before_evaluating_and_deduplicates_alerts(tmp_path, monkeypatch):
