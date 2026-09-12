@@ -25,7 +25,7 @@ def run_cycle(repository: SQLiteRepository, *, live_search_service: Callable = l
     eligible = [
         int(entry["release_id"])
         for entry in repository.watchlist_entries(enabled_only=True)
-        if entry["last_check_status"] in {"OK", "PARTIAL"} and int(entry["last_fresh_offer_count"] or 0) > 0
+        if entry["last_check_status"] in {"OK", "PARTIAL", "NEEDS_USER_ACTION"} and int(entry["last_fresh_offer_count"] or 0) > 0
     ]
     # Possible broad artist/title hits and cache fallbacks are deliberately
     # excluded: only detail-validated fresh evidence can create an alert.

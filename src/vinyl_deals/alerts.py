@@ -101,7 +101,7 @@ def evaluate_watchlist(repository: SQLiteRepository, *, now: datetime | None = N
             # evidence of present stock or a new price for notifications.
             if selected_offer_ids is not None and offer_id not in selected_offer_ids:
                 continue
-            if offer.availability != Availability.IN_STOCK or offer.fetched_at < point - timedelta(days=freshness_days) or not _passes_filters(entry, offer):
+            if offer.provenance != "AUTOMATIC" or offer.availability != Availability.IN_STOCK or offer.fetched_at < point - timedelta(days=freshness_days) or not _passes_filters(entry, offer):
                 continue
             deal = evaluate_offer(repository, offer_id, now=point, freshness_days=freshness_days)
             local = offer.local_store

@@ -20,6 +20,7 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
+from vinyl_deals.browser_profiles import interactive_challenge_present
 from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 from vinyl_deals.matching.normalize import text
 
@@ -86,7 +87,8 @@ class PublicHtmlVinylAdapter(BaseStoreAdapter):
         try:
             html = self._fetch(self._search_url(query))
             if self._is_blocked(html):
-                return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} returned a CAPTCHA or access-check page; source paused.",), status=StoreSearchStatus.RESTRICTED)
+                status = StoreSearchStatus.NEEDS_USER_ACTION if interactive_challenge_present(html) else StoreSearchStatus.RESTRICTED
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, (f"{self.store_name} returned a CAPTCHA or access-check page; source paused.",), status=status)
             offers = tuple(self._matching_search_cards(self.parse_listing(html), query))
             return StoreSearchResult(self.source, offers, status=StoreSearchStatus.FOUND if offers else StoreSearchStatus.EMPTY)
         except (HTTPError, URLError, OSError) as error:

@@ -24,9 +24,9 @@ def test_unverified_sources_report_structured_targeted_search_status(factory, st
     assert result.status == status
 
 
-def test_onlinetrade_reports_real_access_check_as_restricted(monkeypatch) -> None:
+def test_onlinetrade_reports_real_access_check_as_needing_user_action(monkeypatch) -> None:
     adapter = OnlineTradeAdapter()
     monkeypatch.setattr(adapter, "_fetch", lambda _url: "<script src='https://servicepipe.tech/check.js'></script><js-challenge-loader></js-challenge-loader>")
     result = adapter.search_offers(StoreSearchQuery(title="Wish You Were Here"))
     assert result.state == StoreState.DEGRADED
-    assert result.status == StoreSearchStatus.RESTRICTED
+    assert result.status == StoreSearchStatus.NEEDS_USER_ACTION

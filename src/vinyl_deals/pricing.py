@@ -70,7 +70,7 @@ def classify(discount: Decimal | None, comparable_count: int) -> DealClass:
 
 def evaluate_offer(repository: SQLiteRepository, offer_id: int, *, now: datetime | None = None, freshness_days: int = DEFAULT_FRESHNESS_DAYS) -> DealResult | None:
     target = repository.offer_by_id(offer_id)
-    if not target or target[1].price is None or target[1].price <= 0 or target[1].availability.value != "in_stock" or target[0] is None:
+    if not target or target[1].provenance != "AUTOMATIC" or target[1].price is None or target[1].price <= 0 or target[1].availability.value != "in_stock" or target[0] is None:
         return None
     release_id, offer = target
     point = now or datetime.now(timezone.utc)
@@ -83,6 +83,7 @@ def evaluate_offer(repository: SQLiteRepository, offer_id: int, *, now: datetime
     for _, other in comparables:
         if (
             target_condition != "unknown"
+            and other.provenance == "AUTOMATIC"
             and condition_bucket(other) == target_condition
             and other.source != offer.source
             and other.price is not None

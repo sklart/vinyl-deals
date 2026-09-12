@@ -59,7 +59,7 @@ class CollectomaniaAdapter(BaseStoreAdapter):
         try:
             html = self._fetch(f"{self.base_url}/search?{urlencode({'q': query.text()})}")
             if self._is_blocked(html):
-                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Collectomania returned a CAPTCHA/access-check page.",), status=StoreSearchStatus.RESTRICTED)
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Collectomania returned a CAPTCHA/access-check page.",), status=self.challenge_status(html))
             offers = tuple(self.parse_listing(html))
             return StoreSearchResult(self.source, offers, status=StoreSearchStatus.FOUND if offers else StoreSearchStatus.EMPTY)
         except (HTTPError, URLError, OSError) as error:

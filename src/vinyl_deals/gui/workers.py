@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from inspect import Parameter, signature
 
 from PySide6.QtCore import QThread, Signal
 
@@ -46,12 +47,20 @@ class LiveSearchWorker(QThread):
     completed = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, repository: SQLiteRepository, query: StoreSearchQuery, search_service: Callable = live_search) -> None:
+    def __init__(self, repository: SQLiteRepository, query: StoreSearchQuery, search_service: Callable = live_search, *, sources: tuple[str, ...] | None = None) -> None:
         super().__init__()
-        self.repository, self.query, self.search_service = repository, query, search_service
+        self.repository, self.query, self.search_service, self.sources = repository, query, search_service, sources
 
     def run(self) -> None:
         try:
-            self.completed.emit(self.search_service(self.repository, self.query, progress=self.progress.emit))
+            supports_sources = False
+            try:
+                supports_sources = any(item.name == "sources" or item.kind == Parameter.VAR_KEYWORD for item in signature(self.search_service).parameters.values())
+            except (TypeError, ValueError):
+                pass
+            kwargs = {"progress": self.progress.emit}
+            if self.sources is not None and supports_sources:
+                kwargs["sources"] = self.sources
+            self.completed.emit(self.search_service(self.repository, self.query, **kwargs))
         except Exception as error:
             self.failed.emit(str(error))

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from PySide6.QtCore import QSettings, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont
@@ -34,12 +35,12 @@ from PySide6.QtWidgets import (
 from vinyl_deals.database.repository import SQLiteRepository
 from vinyl_deals.discogs import DiscogsApiClient, DiscogsService
 from vinyl_deals.build_metadata import metadata as build_metadata
-from vinyl_deals.domain import StoreSearchQuery
+from vinyl_deals.domain import Availability, StoreSearchQuery
 from vinyl_deals.live_search import live_search
 from vinyl_deals.runtime import application_database_path, settings_path
 from vinyl_deals.scheduler import ALLOWED_INTERVALS, Scheduler
 from vinyl_deals.search import ReleaseSearchResult, search_releases
-from vinyl_deals.updates import refresh_catalogs
+from vinyl_deals.updates import DEFAULT_ADAPTER_FACTORIES, refresh_catalogs
 from vinyl_deals.updates import STORE_LABELS
 
 from .workers import LiveSearchWorker, TaskWorker, UpdateWorker
@@ -63,6 +64,8 @@ class MainWindow(QMainWindow):
         self._live_worker: LiveSearchWorker | None = None
         self._live_store_status: dict[str, str] = {}
         self._live_store_details: dict[str, str] = {}
+        self._manual_action_sources: set[str] = set()
+        self._current_live_query: StoreSearchQuery | None = None
         self._alert_worker: TaskWorker | None = None
         self._discogs_worker: TaskWorker | None = None
         self._discogs_pending: tuple[int, tuple[int, ...]] | None = None
@@ -103,11 +106,14 @@ class MainWindow(QMainWindow):
         self.open_store_button = QPushButton("Открыть магазин")
         self.open_discogs_button = QPushButton("Открыть Discogs")
         self.confirm_discogs_button = QPushButton("Подтвердить Discogs")
+        self.open_store_site_button = QPushButton("Открыть сайт")
+        self.retry_store_button = QPushButton("Повторить запрос")
+        self.manual_price_button = QPushButton("Добавить цену вручную")
         self.about_button = QPushButton("О программе")
         self.open_store_button.setEnabled(False)
         self.open_discogs_button.setEnabled(False)
         self.confirm_discogs_button.setEnabled(False)
-        for button in (self.search_button, self.clear_button, self.refresh_button, self.open_store_button, self.open_discogs_button, self.confirm_discogs_button, self.about_button):
+        for button in (self.search_button, self.clear_button, self.refresh_button, self.open_store_button, self.open_discogs_button, self.confirm_discogs_button, self.open_store_site_button, self.retry_store_button, self.manual_price_button, self.about_button):
             buttons.addWidget(button)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -146,7 +152,11 @@ class MainWindow(QMainWindow):
         self.open_store_button.clicked.connect(self.open_selected_offer)
         self.open_discogs_button.clicked.connect(self.open_discogs)
         self.confirm_discogs_button.clicked.connect(self.confirm_discogs_candidate)
+        self.open_store_site_button.clicked.connect(self.open_action_store_site)
+        self.retry_store_button.clicked.connect(self.retry_action_store)
+        self.manual_price_button.clicked.connect(self.add_manual_price)
         self.about_button.clicked.connect(self.show_about)
+        self._update_manual_actions()
 
     def _build_tracking_page(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page)
@@ -212,7 +222,7 @@ class MainWindow(QMainWindow):
                     checked = datetime.fromisoformat(str(checked)).astimezone().strftime("%d.%m.%Y %H:%M")
                 except ValueError:
                     pass
-            status = {"OK": "Успешно", "PARTIAL": "Частично", "NO_RESULTS": "Не найдено", "ERROR": "Ошибка"}.get(str(entry["last_check_status"]), entry["last_check_status"] or "—")
+            status = {"OK": "Успешно", "PARTIAL": "Частично", "NO_RESULTS": "Не найдено", "ERROR": "Ошибка", "NEEDS_USER_ACTION": "Требуется ручная проверка"}.get(str(entry["last_check_status"]), entry["last_check_status"] or "—")
             values = (entry["artist"], entry["title"], "Да" if entry["enabled"] else "Нет", entry["max_price"] or "", entry["min_deal_class"] or "GOOD", "Да" if entry["local_only"] else "Нет", entry["city"] or "", "Да" if entry["pickup_only"] else "Нет", self._last_alert_text(int(entry["release_id"])), checked or "—", status, entry["last_fresh_offer_count"], entry["last_cached_offer_count"])
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value)); item.setData(Qt.ItemDataRole.UserRole, entry["release_id"]); self.watch_table.setItem(row, column, item)
@@ -448,7 +458,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"Найдено релизов: {len(self.results)}")
             self.release_table.selectRow(0)
 
-    def start_live_search(self) -> None:
+    def start_live_search(self, *, sources: tuple[str, ...] | None = None) -> None:
         criteria = self._criteria()
         if criteria is None:
             return
@@ -467,9 +477,11 @@ class MainWindow(QMainWindow):
         self._search_generation += 1
         self._live_store_status = {}
         self._live_store_details = {}
+        self._manual_action_sources = set()
+        self._current_live_query = query
         self._set_updating(True)
         self.status_label.setText("Поиск во всех магазинах...")
-        worker = LiveSearchWorker(self.repository, query, self.live_search_service)
+        worker = LiveSearchWorker(self.repository, query, self.live_search_service, sources=sources)
         self._live_worker = worker
         worker.progress.connect(self._live_store_finished)
         worker.completed.connect(self._live_search_completed)
@@ -484,10 +496,13 @@ class MainWindow(QMainWindow):
         kind = str(getattr(result, "status_kind", "error"))
         marker = {
             "found": f"✓ {offers}", "empty": "0 результатов", "cached": f"↻ Кэш {offers}",
+            "needs_user_action": "⚠ Требуется ручная проверка",
             "unsupported": "ⓘ Live-search не поддерживается", "restricted": "⚠ Доступ ограничен",
             "timeout": "⌛ Таймаут", "error": "✕ Ошибка",
         }.get(kind, "✕ Ошибка")
         self._live_store_status[source] = f"{label}: {marker}"
+        if kind == "needs_user_action":
+            self._manual_action_sources.add(source)
         detail = str(getattr(result, "detail", ""))
         if detail:
             self._live_store_details[source] = detail
@@ -497,6 +512,7 @@ class MainWindow(QMainWindow):
             self._render_search_results()
         self.status_label.setText("Поиск во всех магазинах:\n" + "\n".join(self._live_store_status.values()))
         self.status_label.setToolTip("\n".join(f"{STORE_LABELS.get(source, source)}: {detail}" for source, detail in self._live_store_details.items()))
+        self._update_manual_actions()
 
     def _live_search_completed(self, result: object) -> None:
         self.results = list(getattr(result, "releases", ()))
@@ -565,6 +581,7 @@ class MainWindow(QMainWindow):
         if worker:
             worker.deleteLater()
         self._set_updating(False)
+        self._update_manual_actions()
 
     def clear_search(self) -> None:
         for field in self.fields.values():
@@ -572,9 +589,12 @@ class MainWindow(QMainWindow):
         self.results = []
         self.selected_result = None
         self._search_performed = False
+        self._manual_action_sources = set()
+        self._current_live_query = None
         self.release_table.setRowCount(0)
         self.offer_table.setRowCount(0)
         self._update_open_actions()
+        self._update_manual_actions()
         self.status_label.setText("Введите реквизиты пластинки и нажмите «Найти».")
 
     def select_release(self) -> None:
@@ -584,6 +604,7 @@ class MainWindow(QMainWindow):
         release_id = selected[0].data(Qt.ItemDataRole.UserRole)
         self.selected_result = next((result for result in self.results if result.release_id == release_id), None)
         self.populate_offers()
+        self._update_manual_actions()
 
     def populate_offers(self) -> None:
         self.offer_table.setRowCount(0)
@@ -603,6 +624,8 @@ class MainWindow(QMainWindow):
             availability = "В наличии" if offer.availability.value == "in_stock" else "Нет в наличии" if offer.availability.value == "out_of_stock" else "Неизвестно"
             store_label = STORE_LABELS.get(offer.store, offer.store)
             store = f"📍 {store_label}" if offer.local_store else store_label
+            if offer.provenance == "MANUAL":
+                store += " (вручную)"
             effective = f"{offer.effective_price} RUB" if offer.effective_price_known and offer.effective_price is not None else "?"
             pickup = "Да" if offer.pickup_available else "Нет"
             discount = f"{offer.discount_pct:.0f}%" if offer.discount_pct is not None else "-"
@@ -673,6 +696,103 @@ class MainWindow(QMainWindow):
         possible = self.repository.discogs_matches(self.selected_result.release_id) if self.selected_result else []
         self.confirm_discogs_button.setEnabled(not self._updating and any(row["status"] == "possible" for row in possible))
 
+    def _action_source(self) -> str | None:
+        sources = sorted(self._manual_action_sources)
+        if not sources:
+            return None
+        if len(sources) == 1:
+            return sources[0]
+        labels = [STORE_LABELS.get(source, source) for source in sources]
+        selected, accepted = QInputDialog.getItem(self, "Магазин", "Выберите магазин:", labels, 0, False)
+        return sources[labels.index(selected)] if accepted else None
+
+    def _action_store_url(self, source: str) -> str | None:
+        query = self._current_live_query
+        factory = DEFAULT_ADAPTER_FACTORIES.get(source)
+        if query is None or factory is None:
+            return None
+        adapter = factory()
+        if source == "onlinetrade":
+            return f"{adapter.base_url}/sitesearch.html?query={quote_plus(query.text())}"
+        search_url = getattr(adapter, "_search_url", None)
+        if callable(search_url):
+            return str(search_url(query))
+        # These are the same public GET routes used by their adapters; this
+        # only opens them for the person and imports no browser data back.
+        if source == "respublica":
+            return f"{adapter.base_url}/search?query={quote_plus(query.text())}"
+        if source == "imagine_club":
+            return f"{adapter.base_url}/search?search_api_views_fulltext={quote_plus(query.text())}"
+        if source == "collectomania":
+            return f"{adapter.base_url}/search?q={quote_plus(query.text())}"
+        if source == "audiomania":
+            return f"{adapter.base_url}/search/?sq={quote_plus(query.text())}"
+        if source == "drhead":
+            return f"{adapter.base_url}/search/?q={quote_plus(query.text())}"
+        return str(getattr(adapter, "catalog_url", "")) or None
+
+    def _update_manual_actions(self) -> None:
+        available = not self._updating and bool(self._manual_action_sources) and self._current_live_query is not None
+        self.open_store_site_button.setEnabled(available)
+        self.retry_store_button.setEnabled(available)
+        self.manual_price_button.setEnabled(not self._updating and self.selected_result is not None)
+
+    def open_action_store_site(self) -> None:
+        source = self._action_source()
+        if source and (url := self._action_store_url(source)):
+            self.url_opener(QUrl(url))
+
+    def retry_action_store(self) -> None:
+        source = self._action_source()
+        if source:
+            # This deliberately reuses the ordinary HTTP adapter flow. No
+            # cookie, storage, token or browser profile is read or imported.
+            self.start_live_search(sources=(source,))
+
+    def add_manual_price(self) -> None:
+        result = self.selected_result
+        if result is None:
+            self.status_label.setText("Сначала выберите Release.")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Добавить цену вручную")
+        form = QFormLayout(dialog)
+        store = QComboBox(dialog)
+        for source, label in STORE_LABELS.items():
+            store.addItem(label, source)
+        default_source = next(iter(self._manual_action_sources), None)
+        if default_source:
+            index = store.findData(default_source)
+            if index >= 0:
+                store.setCurrentIndex(index)
+        url = QLineEdit(dialog); url.setPlaceholderText("https://…")
+        price = QLineEdit(dialog); price.setPlaceholderText("Цена в RUB")
+        availability = QComboBox(dialog); availability.addItem("В наличии", Availability.IN_STOCK); availability.addItem("Нет в наличии", Availability.OUT_OF_STOCK); availability.addItem("Неизвестно", Availability.UNKNOWN)
+        checked = QLineEdit(datetime.now().astimezone().isoformat(timespec="minutes"), dialog)
+        form.addRow("Магазин", store); form.addRow("URL", url); form.addRow("Цена", price)
+        form.addRow("Наличие", availability); form.addRow("Дата проверки", checked)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel, dialog)
+        form.addRow(buttons); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            checked_at = datetime.fromisoformat(checked.text().strip())
+            if checked_at.tzinfo is None:
+                checked_at = checked_at.astimezone()
+            self.repository.add_manual_offer(
+                result.release_id, source=str(store.currentData()), url=url.text().strip(),
+                price=Decimal(price.text().strip().replace(",", ".")),
+                availability=availability.currentData(), checked_at=checked_at,
+            )
+        except (ValueError, ArithmeticError):
+            QMessageBox.warning(self, "Не удалось сохранить", "Проверьте URL, цену и дату проверки.")
+            return
+        criteria = self._criteria()
+        if criteria is not None:
+            self.results = self.search_service(self.repository, **criteria)
+            self._render_search_results()
+        self.status_label.setText("Ручная цена сохранена с пометкой MANUAL; она не участвует в alerts и рыночной медиане.")
+
     def _set_updating(self, updating: bool) -> None:
         self._updating = updating
         if updating and self.scheduler.timer.isActive():
@@ -688,6 +808,7 @@ class MainWindow(QMainWindow):
         for control in (self.watch_add_button, self.watch_remove_button, self.watch_enable_button, self.watch_edit_button, self.watch_open_button, self.watch_table, self.scheduler_enabled, self.scheduler_interval, self.scheduler_auto_send, self.autostart_enabled, self.scheduler_run_button, self.alert_table, self.alert_open_store_button, self.alert_open_discogs_button, self.alert_send_button):
             control.setEnabled(not updating)
         self._update_open_actions()
+        self._update_manual_actions()
 
     def open_selected_offer(self) -> None:
         selected = self.offer_table.selectedItems()

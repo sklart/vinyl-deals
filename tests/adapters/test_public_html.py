@@ -81,6 +81,21 @@ def test_captcha_script_on_a_normal_bitrix_page_is_not_treated_as_a_block() -> N
     assert not PublicHtmlVinylAdapter._is_blocked('<script src="/captcha/widget.js"></script><main>Каталог</main>')
 
 
+def test_visible_interactive_challenge_requires_user_action(monkeypatch) -> None:
+    adapter = _Adapter()
+    monkeypatch.setattr(adapter, "_fetch", lambda _url: "<main><h1>Servicepipe access-check</h1><js-challenge-loader></js-challenge-loader></main>")
+    result = adapter.search_offers(StoreSearchQuery(title="Communique"))
+    assert result.status == StoreSearchStatus.NEEDS_USER_ACTION
+
+
+def test_plain_http_403_remains_restricted(monkeypatch) -> None:
+    from urllib.error import HTTPError
+    adapter = _Adapter()
+    monkeypatch.setattr(adapter, "_fetch", lambda _url: (_ for _ in ()).throw(HTTPError("https://shop.example", 403, "forbidden", {}, None)))
+    result = adapter.search_offers(StoreSearchQuery(title="Communique"))
+    assert result.status == StoreSearchStatus.RESTRICTED
+
+
 def test_live_search_ranks_exact_title_before_substring():
     adapter = _Adapter()
     offers = [

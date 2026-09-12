@@ -67,7 +67,7 @@ class ImagineClubAdapter(BaseStoreAdapter):
         try:
             html = self._fetch(url)
             if any(marker in html.casefold() for marker in ("captcha", "access-check", "проверка безопасности")):
-                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Imagine Club returned a CAPTCHA/access-check page.",), status=StoreSearchStatus.RESTRICTED)
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Imagine Club returned a CAPTCHA/access-check page.",), status=self.challenge_status(html))
             offers = tuple(self.parse_listing(html))
             return StoreSearchResult(self.source, offers, status=StoreSearchStatus.FOUND if offers else StoreSearchStatus.EMPTY)
         except (HTTPError, URLError, OSError) as error:

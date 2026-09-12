@@ -31,6 +31,7 @@ class StoreSearchStatus(StrEnum):
     FOUND = "found"
     EMPTY = "empty"
     CACHED = "cached"
+    NEEDS_USER_ACTION = "needs_user_action"
     UNSUPPORTED = "unsupported"
     RESTRICTED = "restricted"
     TIMEOUT = "timeout"
@@ -119,6 +120,9 @@ class RawOffer:
     edition_tags: tuple[str, ...] = ()
     description: str | None = None
     image_url: str | None = None
+    # MANUAL is entered by a person from a store page and is intentionally
+    # excluded from automated alerts and market benchmarking.
+    provenance: str = "AUTOMATIC"
     raw_data: dict[str, Any] = field(default_factory=dict)
 
     @classmethod

@@ -104,7 +104,7 @@ class AudiomaniaAdapter(BaseStoreAdapter):
         try:
             html = self._fetch(f"{self.base_url}/search/?{urlencode({'sq': query.text()})}")
             if self._is_blocked(html):
-                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Audiomania returned a CAPTCHA/access-check page.",), status=StoreSearchStatus.RESTRICTED)
+                return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Audiomania returned a CAPTCHA/access-check page.",), status=self.challenge_status(html))
             offers = []
             for url in self._product_urls(html)[: self.page_limit or 20]:
                 product = self.parse_public_product_page(self._fetch(url), url)

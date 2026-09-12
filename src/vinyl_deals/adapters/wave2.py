@@ -8,6 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 
 from vinyl_deals.adapters.public_html import PublicHtmlVinylAdapter
+from vinyl_deals.browser_profiles import interactive_challenge_present
 from vinyl_deals.domain import ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 
 
@@ -175,7 +176,7 @@ class OnlineTradeAdapter(PublicHtmlVinylAdapter):
                 status=StoreSearchStatus.RESTRICTED if code in {403, 429} else StoreSearchStatus.ERROR,
             )
         if self._is_blocked(html):
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("OnlineTrade returned an access-check challenge; no bypass is attempted.",), status=StoreSearchStatus.RESTRICTED)
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("OnlineTrade returned an access-check challenge; manual browser verification is required.",), status=StoreSearchStatus.NEEDS_USER_ACTION if interactive_challenge_present(html) else StoreSearchStatus.RESTRICTED)
         # A normal result must still pass the strict mixed-media classifier.
         offers = tuple(item for item in self._matching_search_cards(self.parse_listing(html), query) if self._looks_like_vinyl(" ".join(filter(None, (item.artist_raw, item.title_raw, item.url)))))
         return StoreSearchResult(self.source, offers, status=StoreSearchStatus.FOUND if offers else StoreSearchStatus.EMPTY)

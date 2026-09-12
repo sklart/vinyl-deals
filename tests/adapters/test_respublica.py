@@ -96,7 +96,7 @@ def test_respublica_search_empty_and_blocked_are_structured(monkeypatch) -> None
     monkeypatch.setattr(adapter, "_fetch", lambda _url: "<html>no matching products</html>")
     assert adapter.search_offers(StoreSearchQuery(title="Absent")).status == StoreSearchStatus.EMPTY
     monkeypatch.setattr(adapter, "_fetch", lambda _url: "<html>проверка безопасности</html>")
-    assert adapter.search_offers(StoreSearchQuery(title="Pink Floyd")).status == StoreSearchStatus.RESTRICTED
+    assert adapter.search_offers(StoreSearchQuery(title="Pink Floyd")).status == StoreSearchStatus.NEEDS_USER_ACTION
 
 
 def test_respublica_hcaptcha_configuration_in_normal_nuxt_page_is_not_a_block(monkeypatch) -> None:

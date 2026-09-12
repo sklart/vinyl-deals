@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 from vinyl_deals.domain import RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
+from vinyl_deals.browser_profiles import interactive_challenge_present
 
 
 class BaseStoreAdapter(ABC):
@@ -45,6 +46,11 @@ class BaseStoreAdapter(ABC):
             (reason,),
             status=StoreSearchStatus.UNSUPPORTED,
         )
+
+    @staticmethod
+    def challenge_status(html: str) -> StoreSearchStatus:
+        """HTML challenge requires a person; plain transport denial does not."""
+        return StoreSearchStatus.NEEDS_USER_ACTION if interactive_challenge_present(html) else StoreSearchStatus.RESTRICTED
 
     def get_product(self, source_product_id: str) -> RawOffer | None:
         return None

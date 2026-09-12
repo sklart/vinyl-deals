@@ -30,6 +30,7 @@ class OfferSearchResult:
     effective_price_known: bool = False
     market_median: Decimal | None = None
     comparable_count: int = 0
+    provenance: str = "AUTOMATIC"
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +108,7 @@ def search_offers(repository: SQLiteRepository, release_id: int, *, now: datetim
             deal.deal_class if deal else None, deal.discount_pct if deal else None,
             offer.city, offer.local_store, offer.pickup_available,
             effective.total if effective else None, effective.delivery_known if effective else False,
-            deal.market_median if deal else None, deal.comparable_count if deal else 0,
+            deal.market_median if deal else None, deal.comparable_count if deal else 0, offer.provenance,
         ))
     return tuple(sorted(results, key=lambda item: (item.availability != Availability.IN_STOCK, item.price is None, item.price or Decimal("0"), item.store.casefold(), item.offer_id)))
 

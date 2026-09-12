@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import sqlite3
+from uuid import uuid4
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -152,6 +153,36 @@ class SQLiteRepository:
             offer_id = connection.execute("SELECT id FROM offers WHERE source=? AND source_product_id=?", (offer.source, offer.source_product_id)).fetchone()[0]
             prior = connection.execute("SELECT 1 FROM price_history WHERE offer_id=? AND observed_at=?", (offer_id, occurred)).fetchone()
             if not prior: connection.execute("INSERT INTO price_history(offer_id, observed_at, price, old_price, availability) VALUES (?, ?, ?, ?, ?)", (offer_id, occurred, str(offer.price) if offer.price is not None else None, str(offer.old_price) if offer.old_price is not None else None, offer.availability))
+
+    def add_manual_offer(self, release_id: int, *, source: str, url: str, price: Decimal,
+                         availability: Availability, checked_at: datetime | None = None) -> int:
+        """Persist a user-entered store page price without impersonating a scraper.
+
+        It retains the selected Release metadata, carries explicit MANUAL
+        provenance and never reuses a store's automatic product identity.
+        """
+        if not source.strip() or not url.startswith(("https://", "http://")) or price < 0:
+            raise ValueError("manual offer requires store, http(s) URL and non-negative price")
+        release = self.release_by_id(release_id)
+        if release is None:
+            raise ValueError(f"Unknown Release {release_id}")
+        offer = RawOffer(
+            source=source.strip(), source_product_id=f"manual-{uuid4().hex}", url=url.strip(),
+            fetched_at=checked_at or datetime.now(timezone.utc), artist_raw=release.artist,
+            title_raw=release.title, barcode=release.barcode, label=release.label,
+            catalog_number_raw=release.catalog_number, release_year=release.release_year,
+            country=release.country, format=release.format, disc_count=release.disc_count,
+            price=price, availability=availability, provenance="MANUAL",
+            raw_data={"provenance": "MANUAL"},
+        )
+        self.upsert_offer(offer)
+        self.initialize()
+        with self._connect() as connection:
+            offer_id = connection.execute(
+                "SELECT id FROM offers WHERE source=? AND source_product_id=?", (offer.source, offer.source_product_id)
+            ).fetchone()[0]
+            connection.execute("UPDATE offers SET release_id=? WHERE id=?", (release_id, offer_id))
+        return int(offer_id)
 
     def repair_metadata(self) -> int:
         """Safely normalise legacy offer metadata, retaining raw source data.
@@ -379,7 +410,7 @@ class SQLiteRepository:
                              fresh_offer_count: int = 0, cached_offer_count: int = 0,
                              checked_at: str | None = None) -> None:
         """Record a targeted watch check without touching alert deduplication."""
-        if status not in {"OK", "PARTIAL", "NO_RESULTS", "ERROR"}:
+        if status not in {"OK", "PARTIAL", "NO_RESULTS", "ERROR", "NEEDS_USER_ACTION"}:
             raise ValueError("unsupported watch refresh status")
         self.initialize()
         with self._connect() as connection:

@@ -243,6 +243,21 @@ def test_gui_localizes_raw_store_ids_and_structured_statuses(qapp, tmp_path):
     assert window.offer_table.item(0, 0).text() == "Vinyl.ru"
     window._live_store_finished(LiveStoreResult("pult", StoreState.DEGRADED, 0, status=StoreSearchStatus.RESTRICTED))
     assert "Pult.ru (публичный каталог ограничен): ⚠ Доступ ограничен" in window.status_label.text()
+    window._live_store_finished(LiveStoreResult("onlinetrade", StoreState.DEGRADED, 0, status=StoreSearchStatus.NEEDS_USER_ACTION))
+    assert "OnlineTrade: ⚠ Требуется ручная проверка" in window.status_label.text()
     window._live_store_finished(LiveStoreResult("rio_rostov", StoreState.DEGRADED, 0, status=StoreSearchStatus.UNSUPPORTED))
     assert "РИО: ⓘ Live-search не поддерживается" in window.status_label.text()
+    window.close()
+
+
+def test_manual_action_opens_public_store_url_and_retries_only_that_source(qapp, tmp_path):
+    opened, retried = [], []
+    window = MainWindow(tmp_path / "manual-action.sqlite3", url_opener=lambda url: opened.append(url.toString()) or True)
+    window._current_live_query = StoreSearchQuery(title="Communique")
+    window._live_store_finished(LiveStoreResult("onlinetrade", StoreState.DEGRADED, 0, status=StoreSearchStatus.NEEDS_USER_ACTION))
+    window.open_action_store_site()
+    assert opened == ["https://www.onlinetrade.ru/sitesearch.html?query=Communique"]
+    window.start_live_search = lambda *, sources=None: retried.append(sources)  # type: ignore[method-assign]
+    window.retry_action_store()
+    assert retried == [("onlinetrade",)]
     window.close()

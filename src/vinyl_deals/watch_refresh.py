@@ -86,6 +86,12 @@ def _status(stores: tuple[object, ...], confirmed_count: int, possible_count: in
     offer_count = confirmed_count + possible_count + cached_count
     succeeded = [store for store in stores if store.status_kind in {StoreSearchStatus.FOUND.value, StoreSearchStatus.EMPTY.value, StoreSearchStatus.CACHED.value}]
     unavailable = [store for store in stores if store.status_kind not in {StoreSearchStatus.FOUND.value, StoreSearchStatus.EMPTY.value, StoreSearchStatus.CACHED.value}]
+    needs_user_action = any(store.status_kind == StoreSearchStatus.NEEDS_USER_ACTION.value for store in stores)
+    if needs_user_action:
+        # Preserve this actionable state rather than hiding it behind the
+        # generic ERROR/PARTIAL summary. Fresh IDs still remain separately
+        # filtered before alert evaluation.
+        return "NEEDS_USER_ACTION", offer_count, bool(unavailable)
     if not succeeded:
         return "ERROR", offer_count, False
     if unavailable:

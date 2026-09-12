@@ -73,7 +73,7 @@ class RespublicaAdapter(BaseStoreAdapter):
                 status=StoreSearchStatus.RESTRICTED if restricted else StoreSearchStatus.ERROR,
             )
         if self._is_blocked(html):
-            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Respublica returned a CAPTCHA or access-check page; source paused.",), status=StoreSearchStatus.RESTRICTED)
+            return StoreSearchResult(self.source, (), StoreState.DEGRADED, ("Respublica returned a CAPTCHA or access-check page; manual browser verification is required.",), status=self.challenge_status(html))
         offers = tuple(self._parse_nuxt_search(html))
         return StoreSearchResult(
             self.source, offers, StoreState.ACTIVE,

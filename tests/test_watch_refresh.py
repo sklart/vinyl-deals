@@ -173,6 +173,22 @@ def test_error_or_restricted_watch_refresh_keeps_existing_offer_and_no_false_ale
     assert not run_cycle(repository, live_search_service=search)["alerts"]
 
 
+def test_scheduler_records_needs_user_action_without_opening_a_browser(tmp_path):
+    repository = SQLiteRepository(tmp_path / "watch.sqlite3")
+    release = _release(repository, "1")
+    repository.add_watchlist(release.id)
+    calls = []
+
+    def search(_repository, query):
+        calls.append(query.text())
+        return _result(query, offers=0, statuses=(StoreSearchStatus.NEEDS_USER_ACTION,))
+
+    cycle = run_cycle(repository, live_search_service=search)
+    assert calls  # It safely records the store response, not a browser action.
+    assert repository.watchlist_entries()[0]["last_check_status"] == "NEEDS_USER_ACTION"
+    assert cycle["alerts"] == 0
+
+
 def test_cached_offer_is_visible_but_never_creates_watch_alert(tmp_path):
     repository = SQLiteRepository(tmp_path / "watch.sqlite3")
     release = _release(repository, "1", barcode=None, catalog=None, label=None)
