@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 from vinyl_deals.domain import RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
-from vinyl_deals.browser_profiles import interactive_challenge_present
+from vinyl_deals.adapters.challenge import interactive_challenge_present
 
 
 class BaseStoreAdapter(ABC):

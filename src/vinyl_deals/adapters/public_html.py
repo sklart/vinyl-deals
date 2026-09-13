@@ -20,7 +20,7 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from vinyl_deals.adapters.base import BaseStoreAdapter
-from vinyl_deals.browser_profiles import interactive_challenge_present
+from vinyl_deals.adapters.challenge import interactive_challenge_present
 from vinyl_deals.domain import Availability, RawOffer, ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 from vinyl_deals.matching.normalize import text
 

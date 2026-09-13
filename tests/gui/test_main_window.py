@@ -261,3 +261,16 @@ def test_manual_action_opens_public_store_url_and_retries_only_that_source(qapp,
     window.retry_action_store()
     assert retried == [("onlinetrade",)]
     window.close()
+
+
+def test_cached_challenge_keeps_manual_actions_and_shows_cached_count(qapp, tmp_path):
+    window = MainWindow(tmp_path / "challenge-cache.sqlite3")
+    window._current_live_query = StoreSearchQuery(title="Communique")
+    window._live_store_finished(LiveStoreResult(
+        "onlinetrade", StoreState.DEGRADED, 1, cached=True,
+        status=StoreSearchStatus.NEEDS_USER_ACTION,
+    ))
+    assert "OnlineTrade: ⚠ Требуется ручная проверка · Кэш: 1" in window.status_label.text()
+    assert window.open_store_site_button.isEnabled()
+    assert window.retry_store_button.isEnabled()
+    window.close()

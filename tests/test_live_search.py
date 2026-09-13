@@ -66,6 +66,27 @@ def test_live_statuses_explain_why_a_store_has_no_results():
     assert LiveStoreResult("one", StoreState.DEGRADED, 0, status=StoreSearchStatus.ERROR).status_kind == "error"
 
 
+def test_interactive_challenge_keeps_its_actionable_status_when_cache_exists(tmp_path):
+    repository = SQLiteRepository(tmp_path / "challenge-cache.sqlite3")
+    repository.upsert_offer(offer("protected", "cached", 5000))
+
+    class ChallengeAdapter(Adapter):
+        def search_offers(self, _query):
+            return StoreSearchResult(
+                self.source, (), StoreState.DEGRADED,
+                ("interactive access-check",), status=StoreSearchStatus.NEEDS_USER_ACTION,
+            )
+
+    result = live_search(
+        repository, StoreSearchQuery(title="Wish You Were Here"),
+        adapter_factories={"protected": lambda: ChallengeAdapter("protected", ())},
+    )
+    report = result.stores[0]
+    assert report.status_kind == StoreSearchStatus.NEEDS_USER_ACTION.value
+    assert report.cached and report.offers == 1
+    assert result.cached_offer_count == 1
+
+
 def test_live_ranking_happens_before_detail_enrichment_limit():
     broad = offer("one", "broad", 1000)
     broad = replace(broad, artist_raw="Space", title_raw="Space Revolver")

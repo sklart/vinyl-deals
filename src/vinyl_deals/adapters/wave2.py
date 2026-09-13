@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 
 from vinyl_deals.adapters.public_html import PublicHtmlVinylAdapter
-from vinyl_deals.browser_profiles import interactive_challenge_present
+from vinyl_deals.adapters.challenge import interactive_challenge_present
 from vinyl_deals.domain import ScrapeResult, StoreSearchQuery, StoreSearchResult, StoreSearchStatus, StoreState
 
 

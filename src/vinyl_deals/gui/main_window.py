@@ -500,6 +500,8 @@ class MainWindow(QMainWindow):
             "unsupported": "ⓘ Live-search не поддерживается", "restricted": "⚠ Доступ ограничен",
             "timeout": "⌛ Таймаут", "error": "✕ Ошибка",
         }.get(kind, "✕ Ошибка")
+        if kind == "needs_user_action" and bool(getattr(result, "cached", False)):
+            marker += f" · Кэш: {offers}"
         self._live_store_status[source] = f"{label}: {marker}"
         if kind == "needs_user_action":
             self._manual_action_sources.add(source)
@@ -519,7 +521,9 @@ class MainWindow(QMainWindow):
         self._render_search_results()
         possible = len(getattr(result, "possible_matches", ()))
         suffix = f"; возможных совпадений: {possible}" if possible else ""
-        self.status_label.setText(f"Найдено релизов: {len(self.results)}{suffix}")
+        status_lines = "\n".join(self._live_store_status.values())
+        status = f"Найдено релизов: {len(self.results)}{suffix}"
+        self.status_label.setText(f"{status}\n{status_lines}" if status_lines else status)
         self._start_discogs_enrichment(tuple(item.release_id for item in self.results))
 
     def _start_discogs_enrichment(self, release_ids: tuple[int, ...]) -> None:
@@ -680,13 +684,16 @@ class MainWindow(QMainWindow):
     def _summary_text(self, result: ReleaseSearchResult) -> str:
         best = result.lowest_price_offer
         best_text = f"{self._money(best.price)} · {STORE_LABELS.get(best.store, best.store)}" if best else "—"
+        manual = result.lowest_manual_offer
+        manual_text = f"Ручная цена: {self._money(manual.price)} · {STORE_LABELS.get(manual.store, manual.store)} (вручную)" if manual else ""
         effective = self._money(result.best_effective_offer.effective_price) if result.best_effective_offer and result.best_effective_offer.effective_price_known else "—"
         if result.market_median is None or result.discount_pct is None:
             assessment = "Медиана: — · Выгода: — · Оценка: недостаточно данных"
         else:
             deal = result.deal_class.value if result.deal_class else "—"
             assessment = f"Медиана: {self._money(result.market_median)} · Выгода: {result.discount_pct:.1f}% · {deal}"
-        return f"Лучшая цена: {best_text}    Лучшая итоговая: {effective}\n{assessment}\nПредложений: {result.offer_count} · Магазинов: {result.store_count} · Сравнений: {result.comparable_count}"
+        reference = f"\n{manual_text}" if manual_text else ""
+        return f"Лучшая цена: {best_text}    Лучшая итоговая: {effective}\n{assessment}\nПредложений: {result.offer_count} · Магазинов: {result.store_count} · Сравнений: {result.comparable_count}{reference}"
 
     def _update_open_actions(self) -> None:
         selected = self.offer_table.selectedItems()

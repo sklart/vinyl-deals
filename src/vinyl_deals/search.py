@@ -58,6 +58,9 @@ class ReleaseSearchResult:
     comparable_count: int = 0
     discount_pct: Decimal | None = None
     deal_class: DealClass | None = None
+    # Automatic store data drives every market/deal signal.  Manual entries
+    # remain visible as an explicitly labelled reference price only.
+    lowest_manual_offer: OfferSearchResult | None = None
 
     @property
     def best_offer(self) -> OfferSearchResult | None:
@@ -117,6 +120,10 @@ def _available(offers: tuple[OfferSearchResult, ...]) -> list[OfferSearchResult]
     return [offer for offer in offers if offer.availability == Availability.IN_STOCK and offer.price is not None and offer.price > 0]
 
 
+def _automatic_available(offers: tuple[OfferSearchResult, ...]) -> list[OfferSearchResult]:
+    return [offer for offer in _available(offers) if offer.provenance == "AUTOMATIC"]
+
+
 def _bucket(offer: OfferSearchResult) -> str:
     return condition_bucket(RawOffer(source=offer.store, source_product_id=str(offer.offer_id), url=offer.url, fetched_at=datetime.now(timezone.utc), condition_media=offer.condition))
 
@@ -131,21 +138,26 @@ def find_best_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult 
 
 
 def find_best_new_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult | None:
-    return _lowest([offer for offer in _available(offers) if _bucket(offer) == "new"])
+    return _lowest([offer for offer in _automatic_available(offers) if _bucket(offer) == "new"])
 
 
 def find_best_used_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult | None:
-    return _lowest([offer for offer in _available(offers) if _bucket(offer) in {"nm", "ex", "vg+", "vg", "good"}])
+    return _lowest([offer for offer in _automatic_available(offers) if _bucket(offer) in {"nm", "ex", "vg+", "vg", "good"}])
 
 
 def find_lowest_price_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult | None:
-    """Lowest current available price; condition is deliberately not a filter."""
-    return _lowest(_available(offers))
+    """Lowest automatic current price; condition is deliberately not a filter."""
+    return _lowest(_automatic_available(offers))
+
+
+def find_lowest_manual_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult | None:
+    """Lowest user-entered reference price, kept separate from market data."""
+    return _lowest([offer for offer in _available(offers) if offer.provenance == "MANUAL"])
 
 
 def find_best_effective_offer(offers: tuple[OfferSearchResult, ...]) -> OfferSearchResult | None:
     """Lowest complete effective price; unknown delivery is ineligible."""
-    candidates = [offer for offer in _available(offers) if offer.effective_price_known and offer.effective_price is not None]
+    candidates = [offer for offer in _automatic_available(offers) if offer.effective_price_known and offer.effective_price is not None]
     return min(candidates, key=lambda item: (item.effective_price, item.store.casefold(), item.offer_id)) if candidates else None
 
 
@@ -168,5 +180,6 @@ def search_releases(repository: SQLiteRepository, *, artist: str | None = None, 
             len(offers), len({offer.store for offer in offers}), any(offer.offer_id in possible_offer_ids for offer in offers),
             lowest.market_median if lowest else None, lowest.comparable_count if lowest else 0,
             lowest.discount_pct if lowest else None, lowest.deal_class if lowest else None,
+            find_lowest_manual_offer(offers),
         ))
     return results

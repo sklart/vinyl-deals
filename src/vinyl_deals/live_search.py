@@ -259,7 +259,11 @@ def live_search(
             cached = _cached_offers(repository, source, query)
             if cached:
                 cached_discovered.extend(cached)
-                item = LiveStoreResult(source, item.state, len(cached), item.warnings, item.errors, cached=True, status=StoreSearchStatus.CACHED)
+                # A fallback never hides an actionable access challenge. The
+                # cached count is useful context, but the user still needs
+                # the browser/retry actions for this source.
+                status = item.status if item.status == StoreSearchStatus.NEEDS_USER_ACTION else StoreSearchStatus.CACHED
+                item = LiveStoreResult(source, item.state, len(cached), item.warnings, item.errors, cached=True, status=status)
                 reports[source] = item
                 callback(item)
     releases = _materialize(repository, fresh_discovered, query)
